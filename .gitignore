@@ -1,0 +1,30 @@
+# ─── Dependencies ─────────────────────────────────────────
+node_modules/
+
+# ─── Build output ─────────────────────────────────────────
+dist/
+dist-ssr/
+
+# ─── Electron build output ────────────────────────────────
+electron/out/
+release/
+out/
+
+# ─── Data (SQLite + uploads — персистентные, не в гит) ────
+data/
+
+# ─── Env / secrets ────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ─── Logs ─────────────────────────────────────────────────
+*.log
+npm-debug.log*
+
+# ─── OS / Editor ──────────────────────────────────────────
+.DS_Store
+desktop.ini
+.vscode/*
+!.vscode/extensions.json
+.idea/

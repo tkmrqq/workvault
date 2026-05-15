@@ -1,0 +1,115 @@
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@300,400,500,600,700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --font-body: 'Satoshi', 'Inter', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  --text-xs:   clamp(0.6875rem, 0.65rem + 0.2vw, 0.75rem);
+  --text-sm:   clamp(0.8125rem, 0.78rem + 0.2vw, 0.875rem);
+  --text-base: clamp(0.9375rem, 0.9rem  + 0.2vw, 1rem);
+  --text-lg:   clamp(1.0625rem, 1rem    + 0.3vw, 1.25rem);
+  --text-xl:   clamp(1.25rem,   1.1rem  + 0.6vw, 1.75rem);
+
+  --space-1:  0.25rem;  --space-2:  0.5rem;   --space-3:  0.75rem;
+  --space-4:  1rem;     --space-5:  1.25rem;  --space-6:  1.5rem;
+  --space-8:  2rem;     --space-10: 2.5rem;   --space-12: 3rem;
+
+  --radius-sm: 0.25rem; --radius-md: 0.5rem;
+  --radius-lg: 0.75rem; --radius-xl: 1rem;
+  --radius-full: 9999px;
+
+  --transition: 140ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ── DARK (default) ──────────────────── */
+:root, [data-theme="dark"] {
+  --bg:            #0d0d0d;
+  --surface:       #111111;
+  --surface-2:     #161616;
+  --surface-3:     #1c1c1c;
+  --hover:         #222222;
+  --divider:       #272727;
+  --border:        #2e2e2e;
+
+  --text:          #ddddd8;
+  --text-muted:    #888884;
+  --text-faint:    #505050;
+  --text-inverse:  #111111;
+
+  --accent:        #7c6af7;
+  --accent-hover:  #9a8bf9;
+  --accent-soft:   rgba(124,106,247,.13);
+  --accent-line:   rgba(124,106,247,.35);
+
+  --green:  #4caf7d;
+  --orange: #e8956d;
+  --red:    #e06c75;
+  --gold:   #e8af34;
+
+  --shadow-sm: 0 1px 4px rgba(0,0,0,.45);
+  --shadow-md: 0 4px 18px rgba(0,0,0,.55);
+  --shadow-lg: 0 12px 40px rgba(0,0,0,.65);
+}
+
+/* ── LIGHT ───────────────────────────── */
+[data-theme="light"] {
+  --bg:            #f4f3ef;
+  --surface:       #fafaf8;
+  --surface-2:     #ffffff;
+  --surface-3:     #eeede9;
+  --hover:         #e8e7e2;
+  --divider:       #e0deda;
+  --border:        #d2d0ca;
+
+  --text:          #1a1a18;
+  --text-muted:    #6b6a65;
+  --text-faint:    #b0aea8;
+  --text-inverse:  #fafaf8;
+
+  --accent:        #5f4fe6;
+  --accent-hover:  #4b3dd0;
+  --accent-soft:   rgba(95,79,230,.1);
+  --accent-line:   rgba(95,79,230,.3);
+
+  --green:  #2e8b57;
+  --orange: #c0622a;
+  --red:    #c0393f;
+  --gold:   #c08500;
+
+  --shadow-sm: 0 1px 4px rgba(0,0,0,.07);
+  --shadow-md: 0 4px 18px rgba(0,0,0,.09);
+  --shadow-lg: 0 12px 40px rgba(0,0,0,.12);
+}
+
+/* ── BASE ────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { -webkit-font-smoothing: antialiased; scroll-behavior: smooth; }
+body {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--bg);
+  min-height: 100dvh;
+  overflow: hidden;
+}
+button { cursor: pointer; background: none; border: none; font: inherit; color: inherit; }
+input, textarea { font: inherit; color: inherit; }
+img { display: block; max-width: 100%; height: auto; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
+::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+
+@keyframes fadeUp   { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+@keyframes fadeIn   { from { opacity:0 } to { opacity:1 } }
+@keyframes scaleIn  { from { opacity:0; transform:scale(.94); } to { opacity:1; transform:scale(1); } }
+@keyframes slideIn  { from { opacity:0; transform:translateX(-8px); } to { opacity:1; transform:translateX(0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration:.01ms!important; transition-duration:.01ms!important; }
+}

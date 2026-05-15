@@ -1,0 +1,19 @@
+services:
+  workvault:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data          # SQLite + uploads — персистентность
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    # Healthcheck — docker будет знать что контейнер реально живой
+    healthcheck:
+      test: ["CMD", "node", "-e", 
+        "require('http').get('http://localhost:3000/health', r => process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
