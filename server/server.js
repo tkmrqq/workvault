@@ -71,6 +71,10 @@ function withReactions(msg) {
   return { ...msg, reactions: db.getReactions(msg.id) }
 }
 
+const DOWNLOADS_DIR = path.join(__dirname, '../data/downloads')
+if (!fs.existsSync(DOWNLOADS_DIR)) fs.mkdirSync(DOWNLOADS_DIR, { recursive: true })
+app.use('/downloads', express.static(DOWNLOADS_DIR))
+
 // ─── REST API ─────────────────────────────────────────────
 
 app.get('/api/users', (_, res) => res.json(db.getUsers()))
