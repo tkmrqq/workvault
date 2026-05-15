@@ -5,9 +5,11 @@ import { resolve } from 'path'
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const API = env.VITE_API_URL || 'http://localhost:3000'
+  const isElectron = process.env.BUILD_TARGET === 'electron'
 
   return {
     plugins: [vue()],
+    base: isElectron ? './' : '/',   // ← единственное добавление
     resolve: { alias: { '@': resolve(__dirname, 'src') } },
     server: {
       port: 5173,

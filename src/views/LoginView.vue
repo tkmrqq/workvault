@@ -28,6 +28,8 @@
           <span class="avatar" :style="{ background: u.color + '22', color: u.color }">{{ u.avatar }}</span>
           <span class="uname">{{ u.name }}</span>
           <span v-if="selected?.id === u.id" class="check">✓</span>
+          <button class="remove-btn" title="Убрать с этого устройства"
+            @click.stop="removeKnownUser(u.id)">✕</button>
         </button>
       </div>
 
@@ -63,6 +65,14 @@
         <span v-if="!loading">Войти →</span>
         <span v-else>Загружаем...</span>
       </button>
+
+      <a v-if="!isElectron"
+        :href="downloadUrl"
+        class="download-link"
+        download
+      >
+        Скачать приложение для Windows
+      </a>
     </div>
   </div>
 </template>
@@ -86,14 +96,41 @@ const mounted = ref(false)
 const avatars = ['🧑','👩','👨','🧔','👩‍💻','👨‍💻','🦊','🐼','🐻','🐸','🤖','👾']
 const colors  = ['#7c6af7','#4caf7d','#e8956d','#e06c75','#e8af34','#61afef','#c678dd','#56b6c2']
 
+// ── Вариант Б: только пользователи сохранённые на этом устройстве ──
+const STORAGE_KEY = 'wv-known-users'
+
+function getKnownUsers() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]') } catch { return [] }
+}
+
+function saveKnownUser(u) {
+  const list = getKnownUsers()
+  if (!list.find(x => x.id === u.id)) {
+    list.push({ id: u.id, name: u.name, avatar: u.avatar, color: u.color })
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(list))
+  }
+}
+
+function removeKnownUser(id) {
+  const list = getKnownUsers().filter(u => u.id !== id)
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(list))
+  existingUsers.value = list
+  if (selected.value?.id === id) selected.value = null
+}
+
+// ── Ссылка на скачивание ──
+const API = import.meta.env.VITE_API_URL || ''
+const downloadUrl = `${API}/downloads/WorkVault%20Setup%201.0.0.exe`
+const isElectron = !!window.electronAPI
+
 const canLogin = computed(() =>
   selected.value || newName.value.trim().length > 0
 )
 
 onMounted(async () => {
-  existingUsers.value = await store.fetchUsers()
+  // Грузим только локально известных пользователей
+  existingUsers.value = getKnownUsers()
   mounted.value = true
-  // Request notification permission
   if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission()
   }
@@ -108,11 +145,16 @@ async function doLogin() {
   if (!canLogin.value || loading.value) return
   loading.value = true
   try {
+    let u
     if (selected.value) {
-      await store.login(selected.value.name, selected.value.avatar, selected.value.color)
+      u = await store.login(selected.value.name, selected.value.avatar, selected.value.color)
     } else {
-      await store.login(newName.value.trim(), newAvatar.value, newColor.value)
+      u = await store.login(newName.value.trim(), newAvatar.value, newColor.value)
     }
+    // Сохраняем нового пользователя в список устройства
+    saveKnownUser(u)
+    existingUsers.value = getKnownUsers()
+
     await store.fetchFolders()
     const firstCh = store.allChannels[0]
     if (firstCh) {
@@ -234,4 +276,23 @@ h1 { font-size: var(--text-xl); font-weight: 700; margin-bottom: var(--space-1);
 }
 .login-btn:hover:not(:disabled) { background: var(--accent-hover); }
 .login-btn:disabled { opacity: .45; cursor: not-allowed; }
+.remove-btn {
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-full);
+  font-size: 10px; color: var(--text-faint);
+  transition: all var(--transition);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.remove-btn:hover { background: rgba(224,108,117,.15); color: var(--red, #e06c75); }
+
+.download-link {
+  display: block; text-align: center;
+  margin-top: var(--space-5);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  transition: color var(--transition);
+}
+.download-link:hover { color: var(--accent); }
 </style>

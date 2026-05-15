@@ -1,14 +1,14 @@
 {
   "name": "workvault",
   "version": "1.0.0",
-  "description": "Командный мессенджер с каналами",
+  "description": "workvault",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:electron": "cross-env BUILD_TARGET=electron vite build && electron-builder --publish never",
     "preview": "vite preview",
     "electron": "electron .",
-
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "server": "node server/server.js",
     "start": "concurrently \"npm run server\" \"npm run electron:dev\""
@@ -25,21 +25,48 @@
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.4",
     "concurrently": "^8.2.2",
+    "cross-env": "^10.1.0",
     "electron": "^29.1.4",
     "electron-builder": "^24.13.3",
+    "pinia": "^2.1.7",
     "vite": "^5.1.6",
     "vue": "^3.4.21",
-    "pinia": "^2.1.7",
     "vue-router": "^4.3.0",
     "wait-on": "^7.2.0"
   },
   "build": {
     "appId": "com.team.workvault",
     "productName": "WorkVault",
-    "directories": { "output": "dist-electron" },
-    "files": ["dist/**/*", "electron/**/*", "server/**/*"],
-    "win": { "target": "nsis" },
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "server/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "data/",
+        "to": "data/",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "src/assets/icon.ico"
+    },
     "mac": { "target": "dmg" },
-    "linux": { "target": "AppImage" }
+    "linux": { "target": "AppImage" },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "WorkVault"
+    }
   }
 }

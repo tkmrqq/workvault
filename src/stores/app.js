@@ -2,6 +2,16 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { io } from 'socket.io-client'
 
+const BASE = window.electronAPI?.serverUrl || ''
+
+function resolveUrl(url) {
+  if (!url) return ''
+  if (url.startsWith('http')) return url
+  return `${BASE}${url}`
+}
+
+const API = import.meta.env.VITE_API_URL || ''
+
 export const useAppStore = defineStore('app', () => {
   // ── State ──────────────────────────────────────────────
   const user        = ref(JSON.parse(localStorage.getItem('wv-user') || 'null'))
@@ -40,12 +50,12 @@ export const useAppStore = defineStore('app', () => {
 
   // ── Users ──────────────────────────────────────────────
   async function fetchUsers() {
-    const res = await fetch('/api/users')
+    const res = await fetch(`${API}/api/users`)
     return res.json()
   }
 
   async function login(name, avatar, color) {
-    const res = await fetch('/api/users', {
+    const res = await fetch(`${API}/api/users`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ name, avatar, color })
@@ -68,7 +78,7 @@ export const useAppStore = defineStore('app', () => {
   function initSocket() {
     if (socket?.connected) return
 
-    socket = io({
+    socket = io(API || window.location.origin, {
       path: '/socket.io',
       transports: ['websocket', 'polling']
     })
@@ -153,7 +163,7 @@ export const useAppStore = defineStore('app', () => {
 
   // ── API ────────────────────────────────────────────────
   async function fetchFolders() {
-    const res = await fetch('/api/folders')
+    const res = await fetch(`${API}/api/folders`)
     folders.value = await res.json()
   }
 
@@ -161,7 +171,7 @@ export const useAppStore = defineStore('app', () => {
     activeChId.value = chId
     socket?.emit('channel:join', { channelId: chId })
     if (!messages.value[chId]) {
-      const res = await fetch(`/api/messages/${chId}`)
+      const res = await fetch(`${API}/api/messages/${chId}`)
       messages.value[chId] = await res.json()
     }
   }
@@ -170,7 +180,7 @@ export const useAppStore = defineStore('app', () => {
     const list = messages.value[chId] || []
     if (!list.length) return false
     const before = list[0].id
-    const res = await fetch(`/api/messages/${chId}?before=${before}`)
+    const res = await fetch(`${API}/api/messages/${chId}?before=${before}`)
     const older = await res.json()
     if (older.length) {
       messages.value[chId] = [...older, ...list]
@@ -193,12 +203,12 @@ export const useAppStore = defineStore('app', () => {
   async function uploadFile(file) {
     const fd = new FormData()
     fd.append('file', file)
-    const res = await fetch('/api/upload', { method: 'POST', body: fd })
+    const res = await fetch(`${API}/api/upload`, { method: 'POST', body: fd })
     return res.json()
   }
 
   async function unfurlUrl(url) {
-    const res = await fetch('/api/unfurl', {
+    const res = await fetch(`${API}/api/unfurl`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ url })
@@ -233,7 +243,7 @@ export const useAppStore = defineStore('app', () => {
   }
 
   async function toggleCrm(messageId) {
-    await fetch(`/api/messages/${messageId}/crm`, {
+    await fetch(`${API}/api/messages/${messageId}/crm`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ channelId: activeChId.value })

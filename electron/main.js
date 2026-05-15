@@ -4,8 +4,10 @@ const fs    = require('fs')
 const https = require('https')
 const http  = require('http')
 
-const isDev     = process.env.NODE_ENV !== 'production'
-const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000'
+const isDev = !app.isPackaged
+const SERVER_URL = isDev
+  ? 'http://localhost:3000'
+  : 'http://172.16.99.37:3000'
 
 let mainWindow
 
@@ -20,7 +22,8 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js')
+      preload: path.join(__dirname, 'preload.js'),
+      additionalArguments: [`--server-url=${SERVER_URL}`]
     },
     icon: path.join(__dirname, '../src/assets/icon.png'),
     backgroundColor: '#0d0d0d',

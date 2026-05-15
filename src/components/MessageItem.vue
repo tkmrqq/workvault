@@ -105,7 +105,15 @@ const showPicker = ref(false)
 
 const EMOJIS = ['👍','❤️','🔥','😂','👀','✅','😮','🤔','👏','💯']
 
-const attachUrl = computed(() => props.msg.attachment?.url || '')
+const API = import.meta.env.VITE_API_URL || ''
+
+function resolveUrl(url) {
+  if (!url) return ''
+  if (url.startsWith('http')) return url
+  return `${API}${url}`
+}
+
+const attachUrl = computed(() => resolveUrl(props.msg.attachment?.url))
 const isOwn     = computed(() => props.msg.user_id === store.user?.id)
 
 const parsedLinkMeta = computed(() => {
@@ -143,14 +151,15 @@ function fileIcon(att) {
 
 // Скачивание: через Electron диалог или обычный <a download>
 async function download(att) {
+  const fullUrl = resolveUrl(att.url)
+  
   if (window.electronAPI?.downloadFile) {
-    const result = await window.electronAPI.downloadFile(att.url, att.name)
+    const result = await window.electronAPI.downloadFile(fullUrl, att.name)
     if (!result?.ok && result?.reason !== 'cancelled') {
       alert('Ошибка скачивания: ' + result?.reason)
     }
   } else {
-    // Браузер — fetch + blob чтобы не перекидывало на новую страницу
-    const res  = await fetch(att.url)
+    const res  = await fetch(fullUrl)
     const blob = await res.blob()
     const a    = document.createElement('a')
     a.href     = URL.createObjectURL(blob)

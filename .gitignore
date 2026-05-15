@@ -9,6 +9,7 @@ dist-ssr/
 electron/out/
 release/
 out/
+dist-electron/
 
 # ─── Data (SQLite + uploads — персистентные, не в гит) ────
 data/
