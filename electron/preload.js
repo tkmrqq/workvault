@@ -12,5 +12,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   close:        () => ipcRenderer.invoke('win:close'),
   // Скачать файл: показывает диалог «Сохранить как» и копирует файл
   downloadFile: (url, filename) => ipcRenderer.invoke('download:file', { url, filename }),
-  serverUrl
+  serverUrl,
+  onUpdateAvailable:  (cb) => ipcRenderer.on('update:available',  cb),
+  onUpdateDownloaded: (cb) => ipcRenderer.on('update:downloaded', cb),
+  installUpdate: () => ipcRenderer.invoke('update:install')
 })

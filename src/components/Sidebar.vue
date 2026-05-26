@@ -16,7 +16,7 @@
       </button>
     </div>
 
-    <div class="user-badge">
+    <div class="user-badge" @click="showProfile = true" title="Настройки профиля">
       <span class="avatar-sm" :style="{ background: store.user?.color + '22', color: store.user?.color }">
         {{ store.user?.avatar }}
       </span>
@@ -63,6 +63,13 @@
     </div>
 
     <EditSidebar v-if="showEdit" @close="showEdit = false" />
+      <ProfileModal
+        v-if="showProfile && store.user"
+        :user="store.user"
+        :view-only="false"
+        @close="showProfile = false"
+        @updated="showProfile = false"
+      />
   </aside>
 </template>
 
@@ -71,8 +78,10 @@ import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import EditSidebar from './EditSidebar.vue'
+import ProfileModal from './ProfileModal.vue'
 // TitleBar импорт убран
 
+const showProfile = ref(false)
 const store   = useAppStore()
 const router  = useRouter()
 const search  = ref('')
@@ -101,6 +110,10 @@ function onlineInChannel(channelId) {
 </script>
 
 <style scoped>
+.user-badge { cursor: pointer; transition: background var(--transition); border-radius: var(--radius-md); }
+
+.user-badge:hover { background: var(--hover); }
+
 .sidebar {
   display: flex; flex-direction: column;
   background: var(--surface);

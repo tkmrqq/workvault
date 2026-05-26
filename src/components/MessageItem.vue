@@ -1,6 +1,11 @@
 <template>
   <div class="msg-wrap" :class="{ own: isOwn, 'crm-done': msg.crm_done }">
-    <div class="msg-avatar" :style="{ background: msg.user_color + '22', color: msg.user_color }">
+    <div class="msg-avatar"
+      :style="{ background: msg.user_color + '22', color: msg.user_color }"
+      @click="viewingUser = { id: msg.user_id, name: msg.user_name, avatar: msg.user_avatar, color: msg.user_color }"
+      style="cursor: pointer"
+      :title="msg.user_name"
+    >
       {{ msg.user_avatar }}
     </div>
     <div class="msg-body">
@@ -89,11 +94,20 @@
       <button v-for="e in EMOJIS" :key="e" class="ep-btn" @click="pick(e)">{{ e }}</button>
     </div>
   </div>
+  <ProfileModal
+    v-if="viewingUser"
+    :user="viewingUser"
+    :view-only="true"
+    @close="viewingUser = null"
+  />
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useAppStore } from '@/stores/app'
+import ProfileModal from './ProfileModal.vue'
+
+const viewingUser = ref(null)
 
 const props = defineProps({ msg: Object })
 const emit  = defineEmits(['open-image'])

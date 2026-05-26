@@ -9,6 +9,7 @@
         <MessageInput />
       </div>
     </div>
+    <UpdateBanner />
   </div>
 </template>
 
@@ -21,6 +22,7 @@ import Sidebar       from '@/components/Sidebar.vue'
 import ChannelHeader from '@/components/ChannelHeader.vue'
 import MessageList   from '@/components/MessageList.vue'
 import MessageInput  from '@/components/MessageInput.vue'
+import UpdateBanner from '@/components/UpdateBanner.vue'
 
 const store  = useAppStore()
 const route  = useRoute()

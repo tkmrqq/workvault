@@ -3,6 +3,7 @@ const path  = require('path')
 const fs    = require('fs')
 const https = require('https')
 const http  = require('http')
+const { autoUpdater } = require('electron-updater')
 
 const isDev = !app.isPackaged
 const SERVER_URL = isDev
@@ -49,14 +50,33 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
 
-  mainWindow.once('ready-to-show', () => mainWindow.show())
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show()
+    // Проверяем обновления только в продакшне
+    if (!isDev) {
+      autoUpdater.checkForUpdatesAndNotify()
+    }
+  })
 }
 
 app.whenReady().then(() => {
+  autoUpdater.setFeedURL({
+    provider: 'generic',
+    url: 'http://172.16.99.37:3000/downloads/'
+  })
+
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+autoUpdater.on('update-available', () => {
+  mainWindow?.webContents.send('update:available')
+})
+
+autoUpdater.on('update-downloaded', () => {
+  mainWindow?.webContents.send('update:downloaded')
 })
 
 app.on('window-all-closed', () => {
@@ -69,6 +89,8 @@ ipcMain.handle('notify', (_, { title, body }) => {
 ipcMain.handle('win:minimize', () => mainWindow?.minimize())
 ipcMain.handle('win:maximize', () => mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize())
 ipcMain.handle('win:close',    () => mainWindow?.close())
+
+ipcMain.handle('update:install', () => { autoUpdater.quitAndInstall() })
 
 ipcMain.handle('download:file', async (_, { url, filename }) => {
   const ext     = path.extname(filename)

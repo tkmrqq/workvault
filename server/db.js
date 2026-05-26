@@ -59,6 +59,10 @@ db.exec(`
   );
 `)
 
+try {
+  db.prepare('ALTER TABLE users ADD COLUMN description TEXT').run()
+} catch {}
+
 // ─── СИДЫ ────────────────────────────────────────────────
 const seedFolders = db.prepare('SELECT COUNT(*) as c FROM folders').get()
 if (seedFolders.c === 0) {
