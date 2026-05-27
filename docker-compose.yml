@@ -17,26 +17,26 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
-    cadvisor:
-      image: gcr.io/cadvisor/cadvisor:latest
-      container_name: cadvisor
-      ports:
-        - "0.0.0.0:8080:8080"
-      volumes:
-        - /:/rootfs:ro
-        - /var/run:/var/run:rw
-        - /sys:/sys:ro
-        - /var/lib/docker/:/var/lib/docker:ro
-        - /dev/disk/:/dev/disk:ro
-      devices:
-        - /dev/kmsg
-      privileged: true
-      restart: unless-stopped
-    blackbox:
-      image: prom/blackbox-exporter:latest
-      container_name: blackbox
-      ports:
-        - "9115:9115"
-      volumes:
-        - ./blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
-      restart: unless-stopped
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor
+    ports:
+      - "0.0.0.0:8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    devices:
+      - /dev/kmsg
+    privileged: true
+    restart: unless-stopped
+  blackbox:
+    image: prom/blackbox-exporter:latest
+    container_name: blackbox
+    ports:
+      - "9115:9115"
+    volumes:
+      - ./blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    restart: unless-stopped
