@@ -73,6 +73,16 @@ db.exec(`
     position    INTEGER NOT NULL DEFAULT 0,
     created_at  INTEGER DEFAULT (unixepoch())
   );
+  CREATE TABLE IF NOT EXISTS kanban_subtasks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id     INTEGER NOT NULL REFERENCES kanban_cards(id) ON DELETE CASCADE,
+    title       TEXT    NOT NULL,
+    status      TEXT    NOT NULL DEFAULT 'todo',
+    assignee_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    priority    TEXT    NOT NULL DEFAULT 'medium',
+    position    INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER DEFAULT (unixepoch())
+  );
 `)
 
 try {
@@ -305,6 +315,50 @@ module.exports = {
       const stmt = db.prepare('UPDATE kanban_cards SET column_id=?, position=? WHERE id=?')
       const run  = db.transaction(() => cards.forEach((c, i) => stmt.run(c.column_id, i, c.id)))
       run()
-    }
+    },
+    getCard: (id) => {
+      const card = db.prepare(`
+        SELECT k.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
+        FROM kanban_cards k LEFT JOIN users u ON k.assignee_id = u.id WHERE k.id=?
+      `).get(id)
+      if (!card) return null
+      card.subtasks = db.prepare(`
+        SELECT s.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
+        FROM kanban_subtasks s LEFT JOIN users u ON s.assignee_id = u.id
+        WHERE s.card_id = ? ORDER BY s.position
+      `).all(id)
+      return card
+    },
+    createSubtask: (card_id, title, assignee_id, priority) => {
+      const pos = db.prepare('SELECT COUNT(*) as c FROM kanban_subtasks WHERE card_id=?').get(card_id).c
+      const r = db.prepare(`
+        INSERT INTO kanban_subtasks (card_id, title, assignee_id, priority, position)
+        VALUES (?,?,?,?,?)
+      `).run(card_id, title, assignee_id || null, priority || 'medium', pos)
+      return db.prepare(`
+        SELECT s.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
+        FROM kanban_subtasks s LEFT JOIN users u ON s.assignee_id = u.id WHERE s.id=?
+      `).get(r.lastInsertRowid)
+    },
+    updateSubtask: (id, { title, status, assignee_id, priority }) => {
+      db.prepare(`
+        UPDATE kanban_subtasks SET
+          title       = COALESCE(?, title),
+          status      = COALESCE(?, status),
+          assignee_id = ?,
+          priority    = COALESCE(?, priority)
+        WHERE id = ?
+      `).run(title || null, status || null, assignee_id ?? null, priority || null, id)
+      return db.prepare(`
+        SELECT s.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
+        FROM kanban_subtasks s LEFT JOIN users u ON s.assignee_id = u.id WHERE s.id=?
+      `).get(id)
+    },
+    reorderSubtasks: (subtasks) => {
+      const stmt = db.prepare('UPDATE kanban_subtasks SET status=?, position=? WHERE id=?')
+      const run  = db.transaction(() => subtasks.forEach((s, i) => stmt.run(s.status, i, s.id)))
+      run()
+    },
+    deleteSubtask: (id) => db.prepare('DELETE FROM kanban_subtasks WHERE id=?').run(id)
   }
 }

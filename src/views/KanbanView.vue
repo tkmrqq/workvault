@@ -216,10 +216,7 @@ function openCreate(colId) {
   modal.priority = 'medium'; modal.assignee_id = null
 }
 function openEdit(card) {
-  modal.open = true; modal.mode = 'edit'
-  modal.id = card.id; modal.column_id = card.column_id
-  modal.title = card.title; modal.description = card.description || ''
-  modal.priority = card.priority; modal.assignee_id = card.assignee_id
+  router.push(`/kanban/${card.id}`)
 }
 function closeModal() { modal.open = false }
 

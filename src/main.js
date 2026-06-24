@@ -5,6 +5,7 @@ import App from './App.vue'
 import LoginView from './views/LoginView.vue'
 import ChatView from './views/ChatView.vue'
 import KanbanView from './views/KanbanView.vue'
+import KanbanCardView from './views/KanbanCardView.vue'
 import './assets/base.css'
 
 const router = createRouter({
@@ -12,7 +13,8 @@ const router = createRouter({
   routes: [
     { path: '/', component: LoginView },
     { path: '/chat/:channelId?', component: ChatView, name: 'chat' },
-    { path: '/kanban', component: KanbanView, name: 'kanban' }
+    { path: '/kanban', component: KanbanView, name: 'kanban' },
+    { path: '/kanban/:cardId', component: KanbanCardView, name: 'kanban-card' }
   ]
 })
 

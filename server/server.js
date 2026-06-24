@@ -210,6 +210,39 @@ app.delete('/api/kanban/cards/:id', (req, res) => {
   res.json({ ok: true })
 })
 
+// ─── KANBAN CARD PAGE ─────────────────────────────────────
+app.get('/api/kanban/cards/:id', (req, res) => {
+  const card = db.kanban.getCard(req.params.id)
+  if (!card) return res.status(404).json({ error: 'Не найдено' })
+  res.json(card)
+})
+
+// ─── SUBTASKS ─────────────────────────────────────────────
+app.post('/api/kanban/cards/:id/subtasks', (req, res) => {
+  const { title, assignee_id, priority } = req.body
+  if (!title?.trim()) return res.status(400).json({ error: 'Название обязательно' })
+  const subtask = db.kanban.createSubtask(req.params.id, title.trim(), assignee_id, priority)
+  io.emit('kanban:card:update', req.params.id)
+  res.json(subtask)
+})
+
+app.patch('/api/kanban/subtasks/:id', (req, res) => {
+  const subtask = db.kanban.updateSubtask(req.params.id, req.body)
+  io.emit('kanban:card:update', subtask.card_id)
+  res.json(subtask)
+})
+
+app.post('/api/kanban/subtasks/reorder', (req, res) => {
+  db.kanban.reorderSubtasks(req.body)
+  if (req.body.length) io.emit('kanban:card:update', req.body[0].card_id)
+  res.json({ ok: true })
+})
+
+app.delete('/api/kanban/subtasks/:id', (req, res) => {
+  db.kanban.deleteSubtask(req.params.id)
+  res.json({ ok: true })
+})
+
 // ─── SOCKET.IO ────────────────────────────────────────────
 const onlineUsers = new Map() // socketId → { userId, userName, channelId }
 
