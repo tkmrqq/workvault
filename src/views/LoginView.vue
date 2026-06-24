@@ -120,7 +120,7 @@ function removeKnownUser(id) {
 
 // ── Ссылка на скачивание ──
 const API = import.meta.env.VITE_API_URL || ''
-const downloadUrl = `${API}/downloads/WorkVault%20Setup%201.0.0.exe`
+const downloadUrl = ref('')
 const isElectron = !!window.electronAPI
 
 const canLogin = computed(() =>
@@ -134,6 +134,11 @@ onMounted(async () => {
   if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission()
   }
+  try {
+    const r = await fetch(`${API}/api/latest-release`)
+    const d = await r.json()
+    if (d.url) downloadUrl.value = `${API}${d.url}`
+  } catch {}
 })
 
 function selectUser(u) {

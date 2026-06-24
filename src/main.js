@@ -4,13 +4,15 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
 import LoginView from './views/LoginView.vue'
 import ChatView from './views/ChatView.vue'
+import KanbanView from './views/KanbanView.vue'
 import './assets/base.css'
 
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     { path: '/', component: LoginView },
-    { path: '/chat/:channelId?', component: ChatView, name: 'chat' }
+    { path: '/chat/:channelId?', component: ChatView, name: 'chat' },
+    { path: '/kanban', component: KanbanView, name: 'kanban' }
   ]
 })
 

@@ -75,6 +75,20 @@ const DOWNLOADS_DIR = path.join(__dirname, '../data/downloads')
 if (!fs.existsSync(DOWNLOADS_DIR)) fs.mkdirSync(DOWNLOADS_DIR, { recursive: true })
 app.use('/downloads', express.static(DOWNLOADS_DIR))
 
+// ─── LATEST RELEASE ───────────────────────────────────────
+app.get('/api/latest-release', (_, res) => {
+  try {
+    const files = fs.readdirSync(DOWNLOADS_DIR)
+      .filter(f => f.endsWith('.exe'))
+      .sort()
+      .reverse()
+    if (!files.length) return res.status(404).json({ error: 'Нет релизов' })
+    res.json({ filename: files[0], url: `/downloads/${encodeURIComponent(files[0])}` })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ─── REST API ─────────────────────────────────────────────
 
 app.get('/api/users', (_, res) => res.json(db.getUsers()))
@@ -162,6 +176,38 @@ app.post('/api/folders/update', (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
+})
+
+// ─── KANBAN ───────────────────────────────────────────────
+app.get('/api/kanban', (_, res) => {
+  res.json(db.kanban.getBoard())
+})
+
+app.post('/api/kanban/cards', (req, res) => {
+  const { column_id, title, description, assignee_id, priority } = req.body
+  if (!title?.trim()) return res.status(400).json({ error: 'Название обязательно' })
+  const card = db.kanban.createCard(column_id, title.trim(), description, assignee_id, priority)
+  io.emit('kanban:update', db.kanban.getBoard())
+  res.json(card)
+})
+
+app.patch('/api/kanban/cards/:id', (req, res) => {
+  const card = db.kanban.updateCard(req.params.id, req.body)
+  io.emit('kanban:update', db.kanban.getBoard())
+  res.json(card)
+})
+
+app.post('/api/kanban/cards/reorder', (req, res) => {
+  // body: [{ id, column_id }] — весь список карточек в новом порядке
+  db.kanban.reorderCards(req.body)
+  io.emit('kanban:update', db.kanban.getBoard())
+  res.json({ ok: true })
+})
+
+app.delete('/api/kanban/cards/:id', (req, res) => {
+  db.kanban.deleteCard(req.params.id)
+  io.emit('kanban:update', db.kanban.getBoard())
+  res.json({ ok: true })
 })
 
 // ─── SOCKET.IO ────────────────────────────────────────────

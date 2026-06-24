@@ -52,6 +52,18 @@
       </div>
     </nav>
 
+    <!-- ─── КАНБАН ──────────────────────────────────────────── -->
+    <div class="kanban-nav">
+      <button
+        class="channel-item kanban-btn"
+        :class="{ active: $route.name === 'kanban' }"
+        @click="router.push('/kanban')"
+      >
+        <span class="ch-icon">📋</span>
+        <span class="ch-name">Канбан</span>
+      </button>
+    </div>
+
     <div class="online-section">
       <div class="online-label">Онлайн — {{ store.onlineList.length }}</div>
       <div class="online-list">
@@ -222,4 +234,10 @@ function onlineInChannel(channelId) {
 .online-user { display: flex; align-items: center; gap: var(--space-2); }
 .online-dot-sm { width: 6px; height: 6px; border-radius: var(--radius-full); background: var(--green); flex-shrink: 0; }
 .ou-name { font-size: var(--text-xs); color: var(--text-muted); }
+
+.kanban-nav {
+  padding: var(--space-2) var(--space-2) 0;
+  border-top: 1px solid var(--divider);
+}
+
 </style>

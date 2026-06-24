@@ -49,13 +49,29 @@ db.exec(`
     created_at  INTEGER DEFAULT (unixepoch()),
     updated_at  INTEGER DEFAULT (unixepoch())
   );
-
   CREATE TABLE IF NOT EXISTS reactions (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
     user_id    INTEGER NOT NULL REFERENCES users(id),
     emoji      TEXT NOT NULL,
     UNIQUE(message_id, user_id, emoji)
+  );
+  CREATE TABLE IF NOT EXISTS kanban_columns (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    title    TEXT    NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    color    TEXT    NOT NULL DEFAULT '#7c6af7'
+  );
+
+  CREATE TABLE IF NOT EXISTS kanban_cards (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    column_id   INTEGER NOT NULL REFERENCES kanban_columns(id) ON DELETE CASCADE,
+    title       TEXT    NOT NULL,
+    description TEXT,
+    assignee_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    priority    TEXT    NOT NULL DEFAULT 'medium',
+    position    INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER DEFAULT (unixepoch())
   );
 `)
 
@@ -80,6 +96,13 @@ if (seedFolders.c === 0) {
   const f3 = insertFolder.run('Разное', '😄', 2).lastInsertRowid
   insertChannel.run(f3, 'приколы', '😂', 0)
   insertChannel.run(f3, 'ссылки', '🔗', 1)
+}
+
+const seedKanban = db.prepare('SELECT COUNT(*) as c FROM kanban_columns').get()
+if (seedKanban.c === 0) {
+  db.prepare("INSERT INTO kanban_columns (title, position, color) VALUES (?,?,?)").run('To Do',       0, '#61afef')
+  db.prepare("INSERT INTO kanban_columns (title, position, color) VALUES (?,?,?)").run('In Progress', 1, '#e8af34')
+  db.prepare("INSERT INTO kanban_columns (title, position, color) VALUES (?,?,?)").run('Done',        2, '#4caf7d')
 }
 
 function updateFolders(folders) {
@@ -232,5 +255,56 @@ module.exports = {
       return 'added'
     }
   },
-  updateFolders
+  updateFolders,
+  kanban: {
+    getBoard: () => {
+      const columns = db.prepare('SELECT * FROM kanban_columns ORDER BY position').all()
+      const cards   = db.prepare(`
+        SELECT k.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
+        FROM kanban_cards k
+        LEFT JOIN users u ON k.assignee_id = u.id
+        ORDER BY k.position
+      `).all()
+      return columns.map(col => ({
+        ...col,
+        cards: cards.filter(c => c.column_id === col.id)
+      }))
+    },
+    createCard: (column_id, title, description, assignee_id, priority) => {
+      const pos = db.prepare('SELECT COUNT(*) as c FROM kanban_cards WHERE column_id=?').get(column_id).c
+      const r   = db.prepare(`
+        INSERT INTO kanban_cards (column_id, title, description, assignee_id, priority, position)
+        VALUES (?,?,?,?,?,?)
+      `).run(column_id, title, description || null, assignee_id || null, priority || 'medium', pos)
+      return db.prepare(`
+        SELECT k.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
+        FROM kanban_cards k LEFT JOIN users u ON k.assignee_id = u.id WHERE k.id=?
+      `).get(r.lastInsertRowid)
+    },
+    updateCard: (id, { title, description, assignee_id, priority }) => {
+      db.prepare(`
+        UPDATE kanban_cards SET
+          title       = COALESCE(?, title),
+          description = COALESCE(?, description),
+          assignee_id = ?,
+          priority    = COALESCE(?, priority)
+        WHERE id = ?
+      `).run(title || null, description || null, assignee_id ?? null, priority || null, id)
+      return db.prepare(`
+        SELECT k.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
+        FROM kanban_cards k LEFT JOIN users u ON k.assignee_id = u.id WHERE k.id=?
+      `).get(id)
+    },
+    moveCard: (id, column_id, position) => {
+      db.prepare('UPDATE kanban_cards SET column_id=?, position=? WHERE id=?').run(column_id, position, id)
+    },
+    deleteCard: (id) => {
+      db.prepare('DELETE FROM kanban_cards WHERE id=?').run(id)
+    },
+    reorderCards: (cards) => {
+      const stmt = db.prepare('UPDATE kanban_cards SET column_id=?, position=? WHERE id=?')
+      const run  = db.transaction(() => cards.forEach((c, i) => stmt.run(c.column_id, i, c.id)))
+      run()
+    }
+  }
 }
