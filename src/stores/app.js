@@ -60,7 +60,13 @@ export const useAppStore = defineStore('app', () => {
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ name, avatar, color })
     })
+    if (!res.ok) throw await res.json()
     const u = await res.json()
+    setUser(u)
+    return u
+  }
+
+  function setUser(u) {
     user.value = u
     localStorage.setItem('wv-user', JSON.stringify(u))
     initSocket()
@@ -265,7 +271,7 @@ export const useAppStore = defineStore('app', () => {
   return {
     user, theme, folders, activeChId, activeChannel, allChannels,
     activeMessages, onlineList, typingNames,
-    fetchUsers, login, logout, toggleTheme,
+    fetchUsers, login, setUser, logout, toggleTheme,
     fetchFolders, setChannel, loadMore,
     sendMessage, uploadFile, unfurlUrl,
     editMessage, deleteMessage, toggleReaction, toggleCrm, sendTyping

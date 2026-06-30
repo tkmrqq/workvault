@@ -93,17 +93,41 @@ app.get('/api/latest-release', (_, res) => {
 
 app.get('/api/users', (_, res) => res.json(db.getUsers()))
 
-app.post('/api/users', (req, res) => {
+app.post('/api/users', (req, res, next) => {
   const { name, avatar, color } = req.body
   if (!name?.trim()) return res.status(400).json({ error: 'Имя обязательно' })
-  try {
-    const result = db.createUser(name.trim(), avatar || '🧑', color || '#7c6af7')
-    res.json(db.getUserById(result.lastInsertRowid))
-  } catch {
-    const existing = db.db.prepare('SELECT * FROM users WHERE name = ?').get(name.trim())
-    if (existing) return res.json(existing)
-    res.status(500).json({ error: 'Ошибка создания' })
+
+  const normalizedName = name.trim()
+  const existing = db.getUserByName(normalizedName)
+  if (existing) {
+    return res.status(409).json({ error: 'Пользователь с таким именем уже есть', user: existing })
   }
+
+  try {
+    const result = db.createUser(normalizedName, avatar || '🧑', color || '#7c6af7')
+    res.json(db.getUserById(result.lastInsertRowid))
+  } catch (e) {
+    if (String(e.message || '').includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Пользователь с таким именем уже есть' })
+    }
+    next(e)
+  }
+})
+
+app.post('/api/users/:id/set-pin', (req, res) => {
+  const { pin } = req.body
+  if (!/^\d{4}$/.test(String(pin || ''))) {
+    return res.status(400).json({ error: 'PIN должен состоять из 4 цифр' })
+  }
+  const result = db.setUserPin(req.params.id, pin)
+  if (!result.changes) return res.status(404).json({ error: 'Не найдено' })
+  res.json({ ok: true })
+})
+
+app.post('/api/users/:id/verify-pin', (req, res) => {
+  const { pin } = req.body
+  if (!/^\d{4}$/.test(String(pin || ''))) return res.json({ ok: false })
+  res.json({ ok: db.verifyUserPin(req.params.id, pin) })
 })
 
 app.get('/api/folders', (_, res) => res.json(db.getFolders()))

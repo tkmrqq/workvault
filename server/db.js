@@ -1,6 +1,7 @@
 const Database = require('better-sqlite3')
 const path = require('path')
 const fs = require('fs')
+const crypto = require('crypto')
 
 const DATA_DIR = path.join(__dirname, '../data')
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
@@ -86,8 +87,42 @@ db.exec(`
 `)
 
 try {
+  db.prepare('ALTER TABLE users ADD COLUMN pin_hash TEXT').run()
+} catch {}
+
+try {
   db.prepare('ALTER TABLE users ADD COLUMN description TEXT').run()
 } catch {}
+
+function publicUserSelect(where = '') {
+  return `
+    SELECT
+      id,
+      name,
+      avatar,
+      color,
+      created_at,
+      description,
+      CASE WHEN pin_hash IS NOT NULL AND pin_hash != '' THEN 1 ELSE 0 END as has_pin
+    FROM users
+    ${where}
+  `
+}
+
+function hashPin(pin, salt = crypto.randomBytes(16).toString('hex')) {
+  const hash = crypto.pbkdf2Sync(String(pin), salt, 120000, 32, 'sha256').toString('hex')
+  return `${salt}:${hash}`
+}
+
+function verifyPinHash(pin, stored) {
+  if (!stored) return false
+  const [salt, hash] = String(stored).split(':')
+  if (!salt || !hash) return false
+  const candidate = hashPin(pin, salt).split(':')[1]
+  const left = Buffer.from(candidate, 'hex')
+  const right = Buffer.from(hash, 'hex')
+  return left.length === right.length && crypto.timingSafeEqual(left, right)
+}
 
 // ─── СИДЫ ────────────────────────────────────────────────
 const seedFolders = db.prepare('SELECT COUNT(*) as c FROM folders').get()
@@ -116,91 +151,76 @@ if (seedKanban.c === 0) {
 }
 
 function updateFolders(folders) {
-  // Prepared statements
-  const stmts = {
-    upsertFolder:  db.prepare(`
-      INSERT INTO folders (id, name, icon) VALUES (@id, @name, @icon)
-      ON CONFLICT(id) DO UPDATE SET name = excluded.name, icon = excluded.icon
-    `),
-    insertFolder:  db.prepare(`INSERT INTO folders (name, icon) VALUES (@name, @icon)`),
-    deleteFolder:  db.prepare(`DELETE FROM folders WHERE id = ?`),
-    upsertChannel: db.prepare(`
-      INSERT INTO channels (id, folder_id, name, icon) VALUES (@id, @folderId, @name, @icon)
-      ON CONFLICT(id) DO UPDATE
-        SET name = excluded.name, icon = excluded.icon, folder_id = excluded.folder_id
-    `),
-    insertChannel: db.prepare(`INSERT INTO channels (folder_id, name, icon) VALUES (@folderId, @name, @icon)`),
-    deleteChannel: db.prepare(`DELETE FROM channels WHERE id = ?`),
-  }
-
-  // Всё в одной транзакции — либо всё, либо ничего
   const transaction = db.transaction(() => {
-    for (const folder of folders) {
+    // ID папок которые пришли с фронта (новые без id пропускаем)
+    const incomingFolderIds = folders.filter(f => f.id).map(f => f.id)
 
-      // Папка помечена на удаление
-      if (folder._deleted) {
-        stmts.deleteFolder.run(folder.id)
-        continue
+    // Удаляем папки которых нет в новом списке (каналы удалятся каскадом)
+    const existingFolders = db.prepare('SELECT id FROM folders').all()
+    for (const { id } of existingFolders) {
+      if (!incomingFolderIds.includes(id)) {
+        db.prepare('DELETE FROM folders WHERE id=?').run(id)
       }
+    }
 
-      // Новая папка (id ещё нет) — INSERT и берём lastInsertRowid
+    for (const [fi, folder] of folders.entries()) {
       let folderId = folder.id
-      if (!folderId || folder._new) {
-        const info = stmts.insertFolder.run({
-          name: folder.name  || 'Новая папка',
-          icon: folder.icon  || '📁'
-        })
-        folderId = info.lastInsertRowid
+
+      if (!folderId) {
+        // Новая папка
+        folderId = db.prepare('INSERT INTO folders (name, icon, sort) VALUES (?,?,?)')
+          .run(folder.name || 'Новая папка', folder.icon || '📁', fi).lastInsertRowid
       } else {
-        // Существующая папка — UPDATE
-        stmts.upsertFolder.run({
-          id:   folderId,
-          name: folder.name || 'Без названия',
-          icon: folder.icon || '📁'
-        })
+        db.prepare('UPDATE folders SET name=?, icon=?, sort=? WHERE id=?')
+          .run(folder.name || 'Без названия', folder.icon || '📁', fi, folderId)
       }
 
-      // Обрабатываем каналы внутри папки
-      for (const ch of (folder.channels || [])) {
+      // ID каналов которые пришли для этой папки
+      const incomingChannelIds = (folder.channels || []).filter(c => c.id).map(c => c.id)
 
-        if (ch._deleted) {
-          stmts.deleteChannel.run(ch.id)
-          continue
+      // Удаляем каналы которых нет в новом списке
+      const existingChannels = db.prepare('SELECT id FROM channels WHERE folder_id=?').all(folderId)
+      for (const { id } of existingChannels) {
+        if (!incomingChannelIds.includes(id)) {
+          db.prepare('DELETE FROM channels WHERE id=?').run(id)
         }
+      }
 
-        if (!ch.id || ch._new) {
-          // Новый канал
-          stmts.insertChannel.run({
-            folderId,
-            name: ch.name || 'канал',
-            icon: ch.icon || '#'
-          })
+      for (const [ci, ch] of (folder.channels || []).entries()) {
+        if (!ch.id) {
+          db.prepare('INSERT INTO channels (folder_id, name, icon, sort) VALUES (?,?,?,?)')
+            .run(folderId, ch.name || 'канал', ch.icon || '#', ci)
         } else {
-          // Существующий — UPDATE (включая смену папки)
-          stmts.upsertChannel.run({
-            id:       ch.id,
-            folderId,
-            name:     ch.name || 'канал',
-            icon:     ch.icon || '#'
-          })
+          db.prepare('UPDATE channels SET name=?, icon=?, sort=?, folder_id=? WHERE id=?')
+            .run(ch.name || 'канал', ch.icon || '#', ci, folderId, ch.id)
         }
       }
     }
   })
 
-  transaction() // запускаем
+  transaction()
 }
 
 // ─── QUERIES ─────────────────────────────────────────────
 module.exports = {
   db,
 
-  getUsers: () => db.prepare('SELECT * FROM users ORDER BY name').all(),
+  getUsers: () => db.prepare(`${publicUserSelect()} ORDER BY name`).all(),
 
-  getUserById: (id) => db.prepare('SELECT * FROM users WHERE id = ?').get(id),
+  getUserById: (id) => db.prepare(publicUserSelect('WHERE id = ?')).get(id),
+
+  getUserByName: (name) => db.prepare(publicUserSelect('WHERE name = ?')).get(name),
 
   createUser: (name, avatar, color) =>
     db.prepare('INSERT INTO users (name, avatar, color) VALUES (?,?,?)').run(name, avatar, color),
+
+  setUserPin: (id, pin) =>
+    db.prepare('UPDATE users SET pin_hash = ? WHERE id = ?').run(hashPin(pin), id),
+
+  verifyUserPin: (id, pin) => {
+    const row = db.prepare('SELECT pin_hash FROM users WHERE id = ?').get(id)
+    return verifyPinHash(pin, row?.pin_hash)
+  },
 
   getFolders: () => {
     const folders = db.prepare('SELECT * FROM folders ORDER BY sort').all()
