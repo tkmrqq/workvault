@@ -40,7 +40,7 @@ jobs:
 
           ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
 
-      - name: Update and rebuild WorkVault
+      - name: Deploy WorkVault
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -54,20 +54,5 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
-            echo "==> Rebuilding and restarting containers"
-            docker compose up -d --build --remove-orphans
-
-            echo "==> Removing unused image layers"
-            docker image prune -f
-
-            echo "==> Current containers"
-            docker compose ps
+            bash scripts/deploy.sh
           EOF
-
-      - name: Verify deployment
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-        run: |
-          echo "==> Waiting for WorkVault health endpoint"
-          curl --fail --show-error --retry 12 --retry-delay 3 \
-            "http://${DEPLOY_HOST}:3000/health"
