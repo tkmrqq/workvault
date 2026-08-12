@@ -58,10 +58,14 @@
           </div>
 
           <div class="modal-footer">
-            <button class="btn-cancel" @click="emit('close')">Отмена</button>
-            <button class="btn-save" :disabled="saving || !form.name?.trim()" @click="save">
-              {{ saving ? 'Сохраняем...' : 'Сохранить' }}
-            </button>
+            <button class="btn-switch" @click="switchAccount">Сменить аккаунт</button>
+            <button class="btn-logout" @click="logout">Выйти</button>
+            <div class="modal-footer-actions">
+              <button class="btn-cancel" @click="emit('close')">Отмена</button>
+              <button class="btn-save" :disabled="saving || !form.name?.trim()" @click="save">
+                {{ saving ? 'Сохраняем...' : 'Сохранить' }}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -71,6 +75,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 
 const props = defineProps({

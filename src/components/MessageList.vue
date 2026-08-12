@@ -58,9 +58,13 @@ const bottomEl    = ref(null)
 const lightboxEl  = ref(null)
 const loadingMore = ref(false)
 const atBottom    = ref(true)
-const canLoadMore = ref(true)
 const lightboxUrl = ref(null)
 const lightboxAlt = ref('')
+
+const canLoadMore = computed(() => {
+  if (!store.activeChId || !store.activeMessages.length) return false
+  return store.hasMore[store.activeChId] ?? false
+})
 
 function openLightbox({ url, alt }) {
   lightboxUrl.value = url
@@ -109,7 +113,6 @@ function scrollToBottom(force = false) {
 watch(() => store.activeMessages.length, () => scrollToBottom())
 watch(() => store.activeChId, () => {
   atBottom.value = true
-  canLoadMore.value = true
   nextTick(() => bottomEl.value?.scrollIntoView())
 })
 watch(() => store.typingNames.length, () => scrollToBottom())

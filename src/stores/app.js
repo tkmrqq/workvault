@@ -19,6 +19,7 @@ export const useAppStore = defineStore('app', () => {
   const folders     = ref([])
   const activeChId  = ref(null)
   const messages    = ref({})
+  const hasMore     = ref({})
   const onlineList  = ref([])
   const typingMap   = ref({})
   let socket        = null
@@ -112,10 +113,6 @@ export const useAppStore = defineStore('app', () => {
       _patchMessage(messageId, m => ({ ...m, reactions }))
     })
 
-    socket.on('message:crm', ({ messageId, crm_done }) => {
-      _patchMessage(messageId, m => ({ ...m, crm_done }))
-    })
-
     socket.on('typing:update', ({ userName, typing }) => {
       if (!activeChId.value) return
       if (!typingMap.value[activeChId.value]) typingMap.value[activeChId.value] = {}
@@ -178,18 +175,24 @@ export const useAppStore = defineStore('app', () => {
     socket?.emit('channel:join', { channelId: chId })
     if (!messages.value[chId]) {
       const res = await fetch(`${API}/api/messages/${chId}`)
-      messages.value[chId] = await res.json()
+      const data = await res.json()
+      messages.value[chId] = data.messages
+      hasMore.value[chId] = data.hasMore
     }
   }
 
   async function loadMore(chId) {
     const list = messages.value[chId] || []
-    if (!list.length) return false
+    if (!list.length) {
+      hasMore.value[chId] = false
+      return false
+    }
     const before = list[0].id
     const res = await fetch(`${API}/api/messages/${chId}?before=${before}`)
-    const older = await res.json()
-    if (older.length) {
-      messages.value[chId] = [...older, ...list]
+    const data = await res.json()
+    hasMore.value[chId] = data.hasMore
+    if (data.messages.length) {
+      messages.value[chId] = [...data.messages, ...list]
       return true
     }
     return false
@@ -248,13 +251,7 @@ export const useAppStore = defineStore('app', () => {
     })
   }
 
-  async function toggleCrm(messageId) {
-    await fetch(`${API}/api/messages/${messageId}/crm`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ channelId: activeChId.value })
-    })
-  }
+  function getSocket() { return socket }
 
   function sendTyping() {
     if (!activeChId.value || !user.value) return
@@ -270,10 +267,10 @@ export const useAppStore = defineStore('app', () => {
 
   return {
     user, theme, folders, activeChId, activeChannel, allChannels,
-    activeMessages, onlineList, typingNames,
-    fetchUsers, login, setUser, logout, toggleTheme,
+    activeMessages, hasMore, onlineList, typingNames,
+    fetchUsers, login, setUser, logout, toggleTheme, getSocket,
     fetchFolders, setChannel, loadMore,
     sendMessage, uploadFile, unfurlUrl,
-    editMessage, deleteMessage, toggleReaction, toggleCrm, sendTyping
+    editMessage, deleteMessage, toggleReaction, sendTyping
   }
 })

@@ -1,5 +1,5 @@
 <template>
-  <div class="msg-wrap" :class="{ own: isOwn, 'crm-done': msg.crm_done }">
+  <div class="msg-wrap" :class="{ own: isOwn }">
     <div class="msg-avatar"
       :style="{ background: msg.user_color + '22', color: msg.user_color }"
       @click="viewingUser = { id: msg.user_id, name: msg.user_name, avatar: msg.user_avatar, color: msg.user_color }"
@@ -13,7 +13,6 @@
         <span class="msg-name" :style="{ color: msg.user_color }">{{ msg.user_name }}</span>
         <span class="msg-time">{{ formatTime(msg.created_at) }}</span>
         <span v-if="msg.edited" class="msg-edited">(ред.)</span>
-        <span v-if="msg.crm_done" class="crm-badge">✅ CRM</span>
       </div>
 
       <!-- Text -->
@@ -85,7 +84,6 @@
     <div class="msg-actions">
       <button class="act-btn" title="Реакция" @click.stop="showPicker = !showPicker">😊</button>
       <button v-if="isOwn" class="act-btn" title="Редактировать" @click="startEdit">✏️</button>
-      <button class="act-btn" title="CRM" @click="store.toggleCrm(msg.id)">🗂</button>
       <button v-if="isOwn" class="act-btn red" title="Удалить" @click="store.deleteMessage(msg.id)">🗑</button>
     </div>
 
@@ -235,7 +233,6 @@ function pick(emoji) { store.toggleReaction(props.msg.id, emoji); showPicker.val
 }
 .msg-wrap:hover { background: var(--surface); }
 .msg-wrap:hover .msg-actions { opacity: 1; pointer-events: all; }
-.msg-wrap.crm-done { border-left: 2px solid var(--green); padding-left: calc(var(--space-5) - 2px); }
 
 .msg-avatar {
   width: 34px; height: 34px; border-radius: var(--radius-full);
@@ -247,11 +244,6 @@ function pick(emoji) { store.toggleReaction(props.msg.id, emoji); showPicker.val
 .msg-name { font-size: var(--text-sm); font-weight: 700; }
 .msg-time { font-size: var(--text-xs); color: var(--text-faint); }
 .msg-edited { font-size: 10px; color: var(--text-faint); }
-.crm-badge {
-  font-size: 10px; font-weight: 700;
-  background: rgba(76,175,125,.15); color: var(--green);
-  padding: 1px 6px; border-radius: var(--radius-full);
-}
 
 .msg-text { font-size: var(--text-sm); line-height: 1.6; color: var(--text); word-break: break-word; }
 .msg-text :deep(code) {

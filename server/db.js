@@ -270,9 +270,6 @@ module.exports = {
   deleteMessage: (id, userId) =>
     db.prepare('DELETE FROM messages WHERE id=? AND user_id=?').run(id, userId),
 
-  toggleCrm: (id) =>
-    db.prepare('UPDATE messages SET crm_done = 1 - crm_done WHERE id=?').run(id),
-
   toggleReaction: (messageId, userId, emoji) => {
     const existing = db.prepare(
       'SELECT id FROM reactions WHERE message_id=? AND user_id=? AND emoji=?'

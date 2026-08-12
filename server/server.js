@@ -137,12 +137,16 @@ app.get('/api/folders', (_, res) => res.json(db.getFolders()))
 // поэтому здесь просто добавляем реакции и отдаём
 app.get('/api/messages/:channelId', (req, res) => {
   try {
+    const limit = Number(req.query.limit) || 50
     const messages = db.getMessages(
       Number(req.params.channelId),
-      Number(req.query.limit) || 50,
+      limit,
       req.query.before ? Number(req.query.before) : null
     )
-    res.json(messages.map(withReactions))
+    res.json({
+      messages: messages.map(withReactions),
+      hasMore:  messages.length === limit
+    })
   } catch (e) {
     console.error('getMessages error:', e)
     res.status(500).json({ error: e.message })
@@ -179,17 +183,6 @@ app.post('/api/unfurl', async (req, res) => {
   } catch {
     res.json({ url })
   }
-})
-
-// ─── CRM ──────────────────────────────────────────────────
-app.post('/api/messages/:id/crm', (req, res) => {
-  db.toggleCrm(req.params.id)
-  const msg = db.db.prepare('SELECT crm_done FROM messages WHERE id=?').get(req.params.id)
-  io.to(`channel:${req.body.channelId}`).emit('message:crm', {
-    messageId: parseInt(req.params.id),
-    crm_done:  msg.crm_done
-  })
-  res.json({ ok: true })
 })
 
 // ─── FOLDERS UPDATE ───────────────────────────────────────
