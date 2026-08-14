@@ -11,24 +11,24 @@
         <div class="lc-site">{{ linkPreview.siteName }}</div>
         <div class="lc-title">{{ linkPreview.title }}</div>
       </div>
-      <button class="lc-close" @click="linkPreview = null">✕</button>
+      <button class="lc-close" @click="linkPreview = null"><X :size="11" :stroke-width="2.5" /></button>
     </div>
 
     <!-- Attachment preview -->
     <div v-if="pendingFile" class="attach-preview">
       <img v-if="pendingFile.isImage" :src="pendingFile.localUrl" class="ap-img" />
       <video v-else-if="pendingFile.isVideo" :src="pendingFile.localUrl" class="ap-img" muted />
-      <span v-else class="ap-file">{{ fileIcon(pendingFile) }} {{ pendingFile.name }}</span>
-      <button class="lc-close" @click="clearFile">✕</button>
+      <span v-else class="ap-file"><component :is="fileIcon(pendingFile)" :size="14" :stroke-width="2" style="vertical-align:-2px;margin-right:4px" />{{ pendingFile.name }}</span>
+      <button class="lc-close" @click="clearFile"><X :size="11" :stroke-width="2.5" /></button>
     </div>
 
     <!-- Error -->
-    <div v-if="fileError" class="file-error">⚠️ {{ fileError }}</div>
+    <div v-if="fileError" class="file-error"><AlertTriangle :size="14" :stroke-width="2" style="vertical-align:-2px;margin-right:4px" />{{ fileError }}</div>
 
     <!-- Input row -->
     <div class="input-row">
       <label class="attach-btn" title="Прикрепить файл">
-        📎
+        <Paperclip :size="16" :stroke-width="2" />
         <input
           type="file"
           ref="fileInput"
@@ -48,10 +48,7 @@
         @paste="onPaste"
       />
       <button class="send-btn" :disabled="!canSend" @click="send">
-        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-          <line x1="22" y1="2" x2="11" y2="13"/>
-          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-        </svg>
+        <Send :size="16" :stroke-width="2.5" />
       </button>
     </div>
 
@@ -64,6 +61,7 @@
 <script setup>
 import { ref, computed, nextTick } from 'vue'
 import { useAppStore } from '@/stores/app'
+import { X, Paperclip, AlertTriangle, Send, FileArchive, FileText, File as FileIcon, Film } from 'lucide-vue-next'
 
 const store      = useAppStore()
 const text       = ref('')
@@ -87,12 +85,12 @@ const canSend = computed(() =>
 
 function fileIcon(att) {
   const ext = att.name?.split('.').pop()?.toLowerCase() || ''
-  if (/zip|rar/.test(ext)) return '🗜️'
-  if (/pdf/.test(ext))     return '📄'
-  if (/doc/.test(ext))     return '📝'
-  if (/mp4|webm|mov/.test(ext)) return '🎬'
-  if (/txt|md/.test(ext))  return '📃'
-  return '📎'
+  if (/zip|rar/.test(ext)) return FileArchive
+  if (/pdf/.test(ext))     return FileText
+  if (/doc/.test(ext))     return FileText
+  if (/mp4|webm|mov/.test(ext)) return Film
+  if (/txt|md/.test(ext))  return FileText
+  return FileIcon
 }
 
 function validateFile(file) {

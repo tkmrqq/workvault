@@ -8,7 +8,7 @@
         <!-- Breadcrumb -->
         <div class="breadcrumb">
           <button class="breadcrumb-back" @click="router.push('/kanban')">
-            <span>←</span> Канбан
+            <ArrowLeft :size="14" :stroke-width="2.2" /> Канбан
           </button>
           <span class="breadcrumb-sep">/</span>
           <span class="breadcrumb-col" :style="{ color: colColor }">{{ colTitle }}</span>
@@ -16,16 +16,23 @@
           <span class="breadcrumb-current">{{ card.title }}</span>
         </div>
 
+        <div v-if="card.archived_at" class="archived-banner">
+          <Archive :size="15" :stroke-width="2" /> Эта задача в архиве
+          <button class="btn-restore-inline" @click="unarchive"><RotateCcw :size="12" :stroke-width="2.2" /> Восстановить</button>
+        </div>
+
         <div class="card-page-content">
           <!-- LEFT: card info -->
           <div class="card-info">
             <div class="card-info-header">
               <div class="card-priority-badge" :class="card.priority">
-                {{ priorityLabel(card.priority) }}
+                <component :is="priorityIcon(card.priority)" :size="11" :stroke-width="3" />{{ priorityLabel(card.priority) }}
               </div>
               <div class="card-info-actions">
+                <button v-if="!card.archived_at" class="btn-edit-card btn-archive-card" @click="archive"><Archive :size="13" :stroke-width="2" /> В архив</button>
                 <button class="btn-edit-card" @click="editMode = !editMode">
-                  {{ editMode ? 'Отмена' : '✏️ Редактировать' }}
+                  <template v-if="editMode">Отмена</template>
+                  <template v-else><Pencil :size="12" :stroke-width="2" /> Редактировать</template>
                 </button>
               </div>
             </div>
@@ -65,6 +72,10 @@
                     <option v-for="col in columns" :key="col.id" :value="col.id">{{ col.title }}</option>
                   </select>
                 </div>
+                <div class="edit-group">
+                  <label class="field-label">Дедлайн</label>
+                  <input type="date" v-model="edit.due_date" class="field-input" />
+                </div>
               </div>
               <div class="edit-actions">
                 <button class="btn-save" @click="saveCard">Сохранить</button>
@@ -84,6 +95,11 @@
                   {{ card.assignee_name }}
                 </div>
                 <span v-else class="meta-empty">Не назначено</span>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Дедлайн</span>
+                <span v-if="card.due_date" class="meta-val" :class="{ overdue: isOverdue }">{{ formatDate(card.due_date) }}</span>
+                <span v-else class="meta-empty">Не установлен</span>
               </div>
               <div class="meta-item">
                 <span class="meta-label">Создано</span>
@@ -110,7 +126,7 @@
           <div class="subtasks-area">
             <div class="subtasks-header">
               <h2 class="subtasks-title">Подзадачи</h2>
-              <button class="btn-add-subtask" @click="openAddSubtask">+ Добавить</button>
+              <button class="btn-add-subtask" @click="openAddSubtask"><Plus :size="13" :stroke-width="2.5" /> Добавить</button>
             </div>
 
             <div class="subtasks-board">
@@ -140,9 +156,10 @@
                     @click="openEditSubtask(sub)"
                   >
                     <div class="sub-card-priority" :class="sub.priority">
-                      {{ priorityLabel(sub.priority) }}
+                      <component :is="priorityIcon(sub.priority)" :size="9" :stroke-width="3" />{{ priorityLabel(sub.priority) }}
                     </div>
                     <div class="sub-card-title">{{ sub.title }}</div>
+                    <div v-if="sub.description" class="sub-card-desc">{{ sub.description }}</div>
                     <div v-if="sub.assignee_name" class="sub-card-assignee">
                       <span class="assignee-avatar-sm"
                         :style="{ background: sub.assignee_color + '22', color: sub.assignee_color }">
@@ -168,11 +185,15 @@
         <div class="modal">
           <div class="modal-header">
             <h2>{{ subModal.mode === 'create' ? 'Новая подзадача' : 'Редактировать подзадачу' }}</h2>
-            <button class="modal-close" @click="subModal.open = false">✕</button>
+            <button class="modal-close" @click="subModal.open = false"><X :size="14" :stroke-width="2.5" /></button>
           </div>
           <div class="modal-body">
             <label class="field-label">Название *</label>
             <input v-model="subModal.title" class="field-input" placeholder="Что нужно сделать?" autofocus @keydown.enter="saveSubtask" />
+
+            <label class="field-label">Описание</label>
+            <textarea v-model="subModal.description" class="field-textarea" placeholder="Подробности..." rows="3" />
+
             <div class="edit-row">
               <div class="edit-group">
                 <label class="field-label">Приоритет</label>
@@ -212,6 +233,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import TitleBar from '@/components/TitleBar.vue'
 import Sidebar  from '@/components/Sidebar.vue'
+import {
+  ArrowLeft, Archive, RotateCcw, Pencil, X, Plus,
+  ArrowDown, ArrowRight as ArrowRightIcon, ArrowUp as ArrowUpIcon
+} from 'lucide-vue-next'
 
 const store  = useAppStore()
 const route  = useRoute()
@@ -222,7 +247,7 @@ const card    = ref(null)
 const users   = ref([])
 const columns = ref([])
 const editMode = ref(false)
-const edit = reactive({ title: '', description: '', priority: 'medium', assignee_id: null, column_id: null })
+const edit = reactive({ title: '', description: '', priority: 'medium', assignee_id: null, column_id: null, due_date: '' })
 
 // ─── Subtask columns ──────────────────────────────────────
 const STATUSES = [
@@ -244,6 +269,7 @@ const progressPct = computed(() => {
 
 const colTitle = computed(() => columns.value.find(c => c.id === card.value?.column_id)?.title || '')
 const colColor = computed(() => columns.value.find(c => c.id === card.value?.column_id)?.color || 'var(--accent)')
+const isOverdue = computed(() => card.value?.due_date && card.value.due_date * 1000 < Date.now())
 
 // ─── Drag & Drop subtasks ─────────────────────────────────
 const subDragging    = ref(null)
@@ -276,18 +302,28 @@ async function onSubDrop(e, status) {
 }
 
 // ─── Card edit ────────────────────────────────────────────
+function tsToDate(ts) {
+  if (!ts) return ''
+  return new Date(ts * 1000).toISOString().slice(0, 10)
+}
+function dateToTs(dateStr) {
+  if (!dateStr) return null
+  return Math.floor(new Date(dateStr + 'T00:00:00').getTime() / 1000)
+}
+
 function startEdit() {
   edit.title       = card.value.title
   edit.description = card.value.description || ''
   edit.priority    = card.value.priority
   edit.assignee_id = card.value.assignee_id
   edit.column_id   = card.value.column_id
+  edit.due_date    = tsToDate(card.value.due_date)
 }
 async function saveCard() {
   await fetch(`${API}/api/kanban/cards/${card.value.id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(edit)
+    body: JSON.stringify({ ...edit, due_date: dateToTs(edit.due_date) })
   })
   editMode.value = false
   await loadCard()
@@ -297,36 +333,50 @@ async function deleteCard() {
   await fetch(`${API}/api/kanban/cards/${card.value.id}`, { method: 'DELETE' })
   router.push('/kanban')
 }
+async function archive() {
+  await fetch(`${API}/api/kanban/cards/${card.value.id}/archive`, { method: 'POST' })
+  await loadCard()
+}
+async function unarchive() {
+  await fetch(`${API}/api/kanban/cards/${card.value.id}/unarchive`, { method: 'POST' })
+  await loadCard()
+}
 
 // ─── Subtask modal ────────────────────────────────────────
 const subModal = reactive({
   open: false, mode: 'create', id: null,
-  title: '', priority: 'medium', assignee_id: null
+  title: '', description: '', priority: 'medium', assignee_id: null
 })
 
 function openAddSubtask() {
   subModal.open = true; subModal.mode = 'create'
-  subModal.id = null; subModal.title = ''
+  subModal.id = null; subModal.title = ''; subModal.description = ''
   subModal.priority = 'medium'; subModal.assignee_id = null
 }
 function openEditSubtask(sub) {
   subModal.open = true; subModal.mode = 'edit'
-  subModal.id = sub.id; subModal.title = sub.title
+  subModal.id = sub.id; subModal.title = sub.title; subModal.description = sub.description || ''
   subModal.priority = sub.priority; subModal.assignee_id = sub.assignee_id
 }
 async function saveSubtask() {
   if (!subModal.title.trim()) return
+  const body = {
+    title: subModal.title.trim(),
+    description: subModal.description || null,
+    priority: subModal.priority,
+    assignee_id: subModal.assignee_id
+  }
   if (subModal.mode === 'create') {
     await fetch(`${API}/api/kanban/cards/${card.value.id}/subtasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: subModal.title.trim(), priority: subModal.priority, assignee_id: subModal.assignee_id })
+      body: JSON.stringify(body)
     })
   } else {
     await fetch(`${API}/api/kanban/subtasks/${subModal.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: subModal.title.trim(), priority: subModal.priority, assignee_id: subModal.assignee_id })
+      body: JSON.stringify(body)
     })
   }
   subModal.open = false
@@ -345,7 +395,10 @@ async function loadCard() {
 }
 
 function priorityLabel(p) {
-  return { low: '↓ Низкий', medium: '→ Средний', high: '↑ Высокий' }[p] || p
+  return { low: 'Низкий', medium: 'Средний', high: 'Высокий' }[p] || p
+}
+function priorityIcon(p) {
+  return { low: ArrowDown, medium: ArrowRightIcon, high: ArrowUpIcon }[p] || ArrowRightIcon
 }
 function formatDate(ts) {
   return new Date(ts * 1000).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
@@ -363,11 +416,12 @@ onMounted(async () => {
   ])
   users.value   = await ur.json()
   columns.value = (await br.json())
-  if (store.socket) {
-    store.socket.on('kanban:card:update', (cardId) => {
+  const socket = store.getSocket()
+  if (socket) {
+    socket.on('kanban:card:update', (cardId) => {
       if (String(cardId) === String(route.params.cardId)) loadCard()
     })
-    offSocket = () => store.socket.off('kanban:card:update')
+    offSocket = () => socket.off('kanban:card:update')
   }
 })
 onUnmounted(() => offSocket?.())
@@ -399,36 +453,52 @@ onUnmounted(() => offSocket?.())
 .breadcrumb-col { font-weight: 600; }
 .breadcrumb-current { color: var(--text-muted); }
 
-/* ── Content ── */
+/* ── Archived banner ── */
+.archived-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 20px;
+  background: rgba(232,175,52,.12); color: #e8af34;
+  font-size: var(--text-sm); font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.btn-restore-inline {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 10px; border-radius: var(--radius-md);
+  font-size: var(--text-xs); font-weight: 700;
+  background: rgba(232,175,52,.2); color: #e8af34;
+  transition: all var(--transition);
+}
+.btn-restore-inline:hover { background: rgba(232,175,52,.35); }
+
 .card-page-content {
-  display: grid; grid-template-columns: 340px 1fr;
-  gap: 0; flex: 1; overflow: hidden;
+  display: grid; grid-template-columns: 360px 1fr;
+  flex: 1; overflow: hidden;
 }
-
-/* ── Card info ── */
 .card-info {
+  padding: 20px; overflow-y: auto;
   border-right: 1px solid var(--border);
-  padding: 24px 20px;
-  overflow-y: auto; display: flex; flex-direction: column; gap: 16px;
+  display: flex; flex-direction: column; gap: 14px;
 }
-.card-info::-webkit-scrollbar { width: 4px; }
-.card-info::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-.card-info-header { display: flex; align-items: center; justify-content: space-between; }
+.card-info-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.card-info-actions { display: flex; gap: 6px; }
 .card-priority-badge {
-  font-size: 11px; font-weight: 700; padding: 3px 10px;
-  border-radius: 20px; text-transform: uppercase; letter-spacing: .04em;
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 20px;
+  text-transform: uppercase; letter-spacing: .04em;
 }
 .card-priority-badge.low    { background: rgba(76,175,125,.15); color: #4caf7d; }
-.card-priority-badge.medium { background: rgba(232,175,52,.15);  color: #e8af34; }
+.card-priority-badge.medium { background: rgba(232,175,52,.15); color: #e8af34; }
 .card-priority-badge.high   { background: rgba(224,108,117,.15); color: #e06c75; }
 
 .btn-edit-card {
+  display: inline-flex; align-items: center; gap: 4px;
   font-size: var(--text-xs); font-weight: 600; color: var(--text-muted);
   padding: 5px 10px; border-radius: var(--radius-md); border: 1px solid var(--border);
   transition: all var(--transition);
 }
 .btn-edit-card:hover { border-color: var(--accent-line); color: var(--accent); }
+.btn-archive-card:hover { border-color: #e8af34; color: #e8af34; }
 
 .card-page-title { font-size: var(--text-xl); font-weight: 700; line-height: 1.3; }
 .card-page-desc { font-size: var(--text-sm); color: var(--text-muted); line-height: 1.6; white-space: pre-wrap; }
@@ -459,6 +529,7 @@ onUnmounted(() => offSocket?.())
 .meta-item { display: flex; flex-direction: column; gap: 4px; }
 .meta-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); }
 .meta-val { font-size: var(--text-sm); color: var(--text-muted); }
+.meta-val.overdue { color: #e06c75; font-weight: 700; }
 .meta-empty { font-size: var(--text-sm); color: var(--text-faint); font-style: italic; }
 .meta-assignee { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); color: var(--text); }
 .assignee-avatar {
@@ -501,6 +572,7 @@ onUnmounted(() => offSocket?.())
 .subtasks-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
 .subtasks-title { font-size: var(--text-base); font-weight: 700; }
 .btn-add-subtask {
+  display: inline-flex; align-items: center; gap: 5px;
   padding: 6px 14px; border-radius: var(--radius-md);
   font-size: var(--text-xs); font-weight: 600;
   background: var(--accent); color: #fff;
@@ -549,13 +621,17 @@ onUnmounted(() => offSocket?.())
 .sub-card.dragging { opacity: .4; }
 .sub-card-priority {
   font-size: 9px; font-weight: 700; padding: 1px 6px;
-  border-radius: 20px; display: inline-block; margin-bottom: 4px;
+  border-radius: 20px; display: inline-flex; align-items: center; gap: 3px; margin-bottom: 4px;
   text-transform: uppercase; letter-spacing: .04em;
 }
 .sub-card-priority.low    { background: rgba(76,175,125,.15);  color: #4caf7d; }
 .sub-card-priority.medium { background: rgba(232,175,52,.15);  color: #e8af34; }
 .sub-card-priority.high   { background: rgba(224,108,117,.15); color: #e06c75; }
 .sub-card-title { font-size: 12px; font-weight: 600; color: var(--text); line-height: 1.4; margin-bottom: 4px; }
+.sub-card-desc {
+  font-size: 11px; color: var(--text-muted); line-height: 1.4; margin-bottom: 4px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
 .sub-card-assignee { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-muted); }
 .assignee-avatar-sm {
   width: 18px; height: 18px; border-radius: 50%;

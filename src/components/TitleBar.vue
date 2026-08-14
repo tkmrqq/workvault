@@ -2,14 +2,15 @@
   <div v-if="isElectron" class="titlebar">
     <div class="drag-region"></div>
     <div class="win-controls">
-      <button class="wc-btn" @click="win('minimize')">─</button>
-      <button class="wc-btn" @click="win('maximize')">□</button>
-      <button class="wc-btn close" @click="win('close')">✕</button>
+      <button class="wc-btn" @click="win('minimize')"><Minus :size="14" :stroke-width="2" /></button>
+      <button class="wc-btn" @click="win('maximize')"><Square :size="12" :stroke-width="2" /></button>
+      <button class="wc-btn close" @click="win('close')"><X :size="14" :stroke-width="2" /></button>
     </div>
   </div>
 </template>
 
 <script setup>
+import { Minus, Square, X } from 'lucide-vue-next'
 // window.electronAPI появляется только в Electron через preload.js
 const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.isElectron
 

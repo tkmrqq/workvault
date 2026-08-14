@@ -22,6 +22,8 @@ export const useAppStore = defineStore('app', () => {
   const hasMore     = ref({})
   const onlineList  = ref([])
   const typingMap   = ref({})
+  // Фильтр вложений — свой на каждый канал, по умолчанию 'all'
+  const attachmentFilters = ref(JSON.parse(localStorage.getItem('wv-attach-filters') || '{}'))
   let socket        = null
   let typingTimeout = null
 
@@ -29,10 +31,26 @@ export const useAppStore = defineStore('app', () => {
   const allChannels    = computed(() => folders.value.flatMap(f => f.channels || []))
   const activeChannel  = computed(() => allChannels.value.find(c => c.id === activeChId.value))
   const activeMessages = computed(() => messages.value[activeChId.value] || [])
+  const activeAttachmentFilter = computed(() => attachmentFilters.value[activeChId.value] || 'all')
+  const filteredActiveMessages = computed(() => {
+    const filter = activeAttachmentFilter.value
+    if (filter === 'all') return activeMessages.value
+    return activeMessages.value.filter(m => {
+      if (filter === 'image') return m.attachment?.isImage
+      if (filter === 'document') return m.attachment && !m.attachment.isImage
+      if (filter === 'link') return !!m.link_meta
+      return true
+    })
+  })
   const typingNames    = computed(() => {
     const ch = typingMap.value[activeChId.value]
     return ch ? Object.keys(ch) : []
   })
+
+  function setAttachmentFilter(chId, filter) {
+    attachmentFilters.value = { ...attachmentFilters.value, [chId]: filter }
+    localStorage.setItem('wv-attach-filters', JSON.stringify(attachmentFilters.value))
+  }
 
   // ── Theme ──────────────────────────────────────────────
   function applyTheme(t) {
@@ -267,7 +285,8 @@ export const useAppStore = defineStore('app', () => {
 
   return {
     user, theme, folders, activeChId, activeChannel, allChannels,
-    activeMessages, hasMore, onlineList, typingNames,
+    activeMessages, filteredActiveMessages, activeAttachmentFilter, setAttachmentFilter,
+    hasMore, onlineList, typingNames,
     fetchUsers, login, setUser, logout, toggleTheme, getSocket,
     fetchFolders, setChannel, loadMore,
     sendMessage, uploadFile, unfurlUrl,

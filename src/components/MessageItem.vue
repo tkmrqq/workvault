@@ -41,19 +41,19 @@
         <div class="attach-footer">
           <span class="attach-name">{{ msg.attachment.name }}</span>
           <span class="attach-size">{{ formatSize(msg.attachment.size) }}</span>
-          <button class="dl-btn" title="Скачать" @click="download(msg.attachment)">⬇</button>
+          <button class="dl-btn" title="Скачать" @click="download(msg.attachment)"><Download :size="14" :stroke-width="2" /></button>
         </div>
       </div>
 
       <!-- File — иконка по типу + скачать -->
       <div v-else-if="msg.attachment && !msg.attachment.isImage && !msg.attachment.isVideo"
         class="msg-file">
-        <span class="file-icon">{{ fileIcon(msg.attachment) }}</span>
+        <component :is="fileIcon(msg.attachment)" class="file-icon" :size="24" :stroke-width="1.6" />
         <div class="file-info">
           <span class="file-name">{{ msg.attachment.name }}</span>
           <span class="file-size">{{ formatSize(msg.attachment.size) }}</span>
         </div>
-        <button class="dl-btn" title="Скачать" @click="download(msg.attachment)">⬇</button>
+        <button class="dl-btn" title="Скачать" @click="download(msg.attachment)"><Download :size="14" :stroke-width="2" /></button>
       </div>
 
       <!-- Link preview -->
@@ -82,9 +82,9 @@
 
     <!-- Actions -->
     <div class="msg-actions">
-      <button class="act-btn" title="Реакция" @click.stop="showPicker = !showPicker">😊</button>
-      <button v-if="isOwn" class="act-btn" title="Редактировать" @click="startEdit">✏️</button>
-      <button v-if="isOwn" class="act-btn red" title="Удалить" @click="store.deleteMessage(msg.id)">🗑</button>
+      <button class="act-btn" title="Реакция" @click.stop="showPicker = !showPicker"><SmilePlus :size="15" :stroke-width="2" /></button>
+      <button v-if="isOwn" class="act-btn" title="Редактировать" @click="startEdit"><Pencil :size="14" :stroke-width="2" /></button>
+      <button v-if="isOwn" class="act-btn red" title="Удалить" @click="store.deleteMessage(msg.id)"><Trash2 :size="14" :stroke-width="2" /></button>
     </div>
 
     <!-- Emoji picker -->
@@ -104,6 +104,10 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useAppStore } from '@/stores/app'
 import ProfileModal from './ProfileModal.vue'
+import {
+  Download, SmilePlus, Pencil, Trash2,
+  FileArchive, FileText, FileSpreadsheet, Music, Film, Image as ImageIcon, File as FileIcon
+} from 'lucide-vue-next'
 
 const viewingUser = ref(null)
 
@@ -150,15 +154,15 @@ const groupedReactions = computed(() => {
 function fileIcon(att) {
   const ext  = att.name?.split('.').pop()?.toLowerCase() || ''
   const mime = att.mime || ''
-  if (/zip|rar|7z|gz|tar/.test(ext))             return '🗜️'
-  if (/pdf/.test(ext) || /pdf/.test(mime))        return '📄'
-  if (/doc|docx/.test(ext))                       return '📝'
-  if (/xls|xlsx/.test(ext))                       return '📊'
-  if (/mp3|wav|ogg|flac|aac/.test(ext))           return '🎵'
-  if (/mp4|webm|mov|mkv|avi/.test(ext))           return '🎬'
-  if (/txt|md|csv/.test(ext))                     return '📃'
-  if (/jpg|jpeg|png|gif|webp|svg/.test(ext))      return '🖼️'
-  return '📎'
+  if (/zip|rar|7z|gz|tar/.test(ext))             return FileArchive
+  if (/pdf/.test(ext) || /pdf/.test(mime))        return FileText
+  if (/doc|docx/.test(ext))                       return FileText
+  if (/xls|xlsx/.test(ext))                       return FileSpreadsheet
+  if (/mp3|wav|ogg|flac|aac/.test(ext))           return Music
+  if (/mp4|webm|mov|mkv|avi/.test(ext))           return Film
+  if (/txt|md|csv/.test(ext))                     return FileText
+  if (/jpg|jpeg|png|gif|webp|svg/.test(ext))      return ImageIcon
+  return FileIcon
 }
 
 // Скачивание: через Electron диалог или обычный <a download>
@@ -302,7 +306,7 @@ function pick(emoji) { store.toggleReaction(props.msg.id, emoji); showPicker.val
   border-radius: var(--radius-lg); max-width: min(360px, 100%);
   transition: background var(--transition);
 }
-.file-icon { font-size: 1.5rem; flex-shrink: 0; line-height: 1; }
+.file-icon { color: var(--accent); flex-shrink: 0; }
 .file-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .file-name { font-size: var(--text-xs); font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .file-size { font-size: 10px; color: var(--text-faint); }

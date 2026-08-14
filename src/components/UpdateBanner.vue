@@ -1,8 +1,8 @@
 <template>
   <Teleport to="body">
     <div v-if="state" class="update-banner">
-      <span v-if="state === 'available'">⬇️ Скачиваем обновление...</span>
-      <span v-else>✅ Обновление готово!</span>
+      <span v-if="state === 'available'" class="ub-row"><Download :size="15" :stroke-width="2" /> Скачиваем обновление...</span>
+      <span v-else class="ub-row"><CheckCircle2 :size="15" :stroke-width="2" /> Обновление готово!</span>
       <button v-if="state === 'downloaded'" class="update-btn" @click="install">
         Установить и перезапустить
       </button>
@@ -12,6 +12,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { Download, CheckCircle2 } from 'lucide-vue-next'
 
 const state = ref(null)
 
@@ -35,6 +36,7 @@ function install() {
   box-shadow: var(--shadow-lg); font-size: var(--text-sm);
   animation: slideUp .3s ease;
 }
+.ub-row { display: inline-flex; align-items: center; gap: 6px; }
 .update-btn {
   padding: var(--space-1) var(--space-3); border-radius: var(--radius-md);
   background: var(--accent); color: white;

@@ -9,10 +9,10 @@
         <circle cx="16" cy="16" r="3.2" fill="var(--accent)" opacity=".9"/>
       </svg>
       <span class="app-name">WorkVault</span>
-      <button class="icon-btn" @click="showEdit = true" title="Управление каналами">⚙️</button>
+      <button class="icon-btn" @click="showEdit = true" title="Управление каналами"><Settings :size="15" :stroke-width="2" /></button>
       <button class="icon-btn" @click="store.toggleTheme()" title="Тема">
-        <span v-if="store.theme === 'dark'">☀️</span>
-        <span v-else>🌙</span>
+        <Sun v-if="store.theme === 'dark'" :size="15" :stroke-width="2" />
+        <Moon v-else :size="15" :stroke-width="2" />
       </button>
     </div>
 
@@ -25,14 +25,14 @@
     </div>
 
     <div class="search-box">
-      <span class="search-icon">🔍</span>
+      <Search class="search-icon" :size="13" :stroke-width="2" />
       <input v-model="search" placeholder="Поиск..." />
     </div>
 
     <nav class="channel-nav">
       <div v-for="folder in filteredFolders" :key="folder.id" class="folder">
         <button class="folder-header" @click="toggleFolder(folder.id)">
-          <span class="folder-arrow" :class="{ open: !collapsed[folder.id] }">›</span>
+          <ChevronRight class="folder-arrow" :class="{ open: !collapsed[folder.id] }" :size="13" :stroke-width="2.5" />
           <span class="folder-icon">{{ folder.icon }}</span>
           <span class="folder-name">{{ folder.name }}</span>
         </button>
@@ -59,7 +59,7 @@
         :class="{ active: $route.name === 'kanban' }"
         @click="router.push('/kanban')"
       >
-        <span class="ch-icon">📋</span>
+        <LayoutDashboard class="ch-icon" :size="14" :stroke-width="2" />
         <span class="ch-name">Канбан</span>
       </button>
     </div>
@@ -91,6 +91,7 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import EditSidebar from './EditSidebar.vue'
 import ProfileModal from './ProfileModal.vue'
+import { Settings, Sun, Moon, Search, ChevronRight, LayoutDashboard } from 'lucide-vue-next'
 // TitleBar импорт убран
 
 const showProfile = ref(false)
@@ -174,7 +175,7 @@ function onlineInChannel(channelId) {
   transition: border-color var(--transition);
 }
 .search-box:focus-within { border-color: var(--accent-line); }
-.search-icon { font-size: .7rem; }
+.search-icon { color: var(--text-faint); flex-shrink: 0; }
 .search-box input {
   background: none; border: none; outline: none;
   font-size: var(--text-xs); color: var(--text); width: 100%;

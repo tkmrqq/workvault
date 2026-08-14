@@ -195,37 +195,98 @@ app.post('/api/folders/update', (req, res) => {
   }
 })
 
-// ─── KANBAN ───────────────────────────────────────────────
-app.get('/api/kanban', (_, res) => {
-  res.json(db.kanban.getBoard())
+// ─── KANBAN: РАБОЧИЕ ЗОНЫ ──────────────────────────────────
+app.get('/api/kanban/workspaces', (_, res) => {
+  res.json(db.kanban.getWorkspaces())
+})
+
+app.post('/api/kanban/workspaces', (req, res) => {
+  const { name, icon } = req.body
+  if (!name?.trim()) return res.status(400).json({ error: 'Название обязательно' })
+  const ws = db.kanban.createWorkspace(name.trim(), icon)
+  io.emit('kanban:workspaces:update')
+  res.json(ws)
+})
+
+app.patch('/api/kanban/workspaces/:id', (req, res) => {
+  const ws = db.kanban.updateWorkspace(req.params.id, req.body)
+  io.emit('kanban:workspaces:update')
+  res.json(ws)
+})
+
+app.delete('/api/kanban/workspaces/:id', (req, res) => {
+  const result = db.kanban.deleteWorkspace(req.params.id)
+  if (!result.ok) return res.status(400).json(result)
+  io.emit('kanban:workspaces:update')
+  res.json(result)
+})
+
+// ─── KANBAN: ДОСКА ──────────────────────────────────────────
+function emitBoardUpdate(workspaceId) {
+  io.emit('kanban:update', { workspace_id: Number(workspaceId) || null, board: db.kanban.getBoard(workspaceId) })
+}
+
+app.get('/api/kanban', (req, res) => {
+  res.json(db.kanban.getBoard(req.query.workspace_id ? Number(req.query.workspace_id) : null))
+})
+
+app.get('/api/kanban/archive', (req, res) => {
+  res.json(db.kanban.getArchivedCards(req.query.workspace_id ? Number(req.query.workspace_id) : null))
 })
 
 app.post('/api/kanban/cards', (req, res) => {
-  const { column_id, title, description, assignee_id, priority } = req.body
+  const { column_id, title, description, assignee_id, priority, due_date, workspace_id } = req.body
   if (!title?.trim()) return res.status(400).json({ error: 'Название обязательно' })
-  const card = db.kanban.createCard(column_id, title.trim(), description, assignee_id, priority)
-  io.emit('kanban:update', db.kanban.getBoard())
+  const card = db.kanban.createCard(column_id, title.trim(), description, assignee_id, priority, due_date)
+  emitBoardUpdate(workspace_id)
   res.json(card)
 })
 
 app.patch('/api/kanban/cards/:id', (req, res) => {
-  const card = db.kanban.updateCard(req.params.id, req.body)
-  io.emit('kanban:update', db.kanban.getBoard())
+  const { workspace_id, ...rest } = req.body
+  const card = db.kanban.updateCard(req.params.id, rest)
+  emitBoardUpdate(workspace_id)
   res.json(card)
 })
 
 app.post('/api/kanban/cards/reorder', (req, res) => {
-  // body: [{ id, column_id }] — весь список карточек в новом порядке
-  db.kanban.reorderCards(req.body)
-  io.emit('kanban:update', db.kanban.getBoard())
+  // body: { workspace_id, cards: [{ id, column_id }] } — весь список карточек в новом порядке
+  const { workspace_id, cards } = Array.isArray(req.body) ? { workspace_id: null, cards: req.body } : req.body
+  db.kanban.reorderCards(cards)
+  emitBoardUpdate(workspace_id)
   res.json({ ok: true })
 })
 
 app.delete('/api/kanban/cards/:id', (req, res) => {
   db.kanban.deleteCard(req.params.id)
-  io.emit('kanban:update', db.kanban.getBoard())
+  emitBoardUpdate(req.query.workspace_id)
   res.json({ ok: true })
 })
+
+app.post('/api/kanban/cards/:id/archive', (req, res) => {
+  db.kanban.archiveCard(req.params.id)
+  emitBoardUpdate(req.body?.workspace_id)
+  res.json({ ok: true })
+})
+
+app.post('/api/kanban/cards/:id/unarchive', (req, res) => {
+  db.kanban.unarchiveCard(req.params.id)
+  emitBoardUpdate(req.body?.workspace_id)
+  res.json({ ok: true })
+})
+
+// Автоархив завершённых карточек — проверяем раз в час
+setInterval(() => {
+  try {
+    const n = db.kanban.autoArchiveStale()
+    if (n > 0) {
+      console.log(`Автоархив: перенесено карточек — ${n}`)
+      io.emit('kanban:update', { workspace_id: null, board: null })
+    }
+  } catch (e) {
+    console.error('autoArchiveStale error:', e)
+  }
+}, 60 * 60 * 1000)
 
 // ─── KANBAN CARD PAGE ─────────────────────────────────────
 app.get('/api/kanban/cards/:id', (req, res) => {
@@ -236,9 +297,9 @@ app.get('/api/kanban/cards/:id', (req, res) => {
 
 // ─── SUBTASKS ─────────────────────────────────────────────
 app.post('/api/kanban/cards/:id/subtasks', (req, res) => {
-  const { title, assignee_id, priority } = req.body
+  const { title, assignee_id, priority, description } = req.body
   if (!title?.trim()) return res.status(400).json({ error: 'Название обязательно' })
-  const subtask = db.kanban.createSubtask(req.params.id, title.trim(), assignee_id, priority)
+  const subtask = db.kanban.createSubtask(req.params.id, title.trim(), assignee_id, priority, description)
   io.emit('kanban:card:update', req.params.id)
   res.json(subtask)
 })
@@ -349,16 +410,19 @@ function getOnlineList() {
 
 // ─── PROFILE ──────────────────────────────────────────────
 app.patch('/api/users/:id', (req, res) => {
-  const { name, avatar, color, description } = req.body
+  const { name, avatar, color, description, banner } = req.body
   try {
     db.db.prepare(`
       UPDATE users SET
         name        = COALESCE(?, name),
         avatar      = COALESCE(?, avatar),
         color       = COALESCE(?, color),
-        description = COALESCE(?, description)
+        description = COALESCE(?, description),
+        banner      = COALESCE(?, banner)
       WHERE id = ?
-    `).run(name || null, avatar || null, color || null, description || null, req.params.id)
+    `).run(name || null, avatar || null, color || null,
+           description !== undefined ? description : null,
+           banner || null, req.params.id)
     res.json(db.getUserById(req.params.id))
   } catch (e) {
     res.status(500).json({ error: e.message })

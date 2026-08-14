@@ -2,8 +2,8 @@
   <div class="overlay" @click.self="$emit('close')">
     <div class="edit-panel">
       <div class="ep-header">
-        <span class="ep-title">⚙️ Управление каналами</span>
-        <button class="ep-close" @click="$emit('close')">✕</button>
+        <span class="ep-title"><Settings :size="14" :stroke-width="2" /> Управление каналами</span>
+        <button class="ep-close" @click="$emit('close')"><X :size="14" :stroke-width="2" /></button>
       </div>
 
       <div class="ep-body">
@@ -11,17 +11,17 @@
           <div class="ef-folder-row">
             <input v-model="folder.icon" class="ef-mini" maxlength="4" placeholder="📁" />
             <input v-model="folder.name" class="ef-input" placeholder="Название папки" />
-            <button class="ef-del" title="Удалить папку" @click="deleteFolder(fi)">🗑</button>
+            <button class="ef-del" title="Удалить папку" @click="deleteFolder(fi)"><Trash2 :size="13" :stroke-width="2" /></button>
           </div>
           <div v-for="(ch, ci) in folder.channels" :key="ci" class="ef-ch-row">
             <input v-model="ch.icon" class="ef-mini" maxlength="4" placeholder="#" />
             <input v-model="ch.name" class="ef-input" placeholder="Канал" />
-            <button class="ef-del" @click="deleteChannel(fi, ci)">✕</button>
+            <button class="ef-del" @click="deleteChannel(fi, ci)"><X :size="13" :stroke-width="2" /></button>
           </div>
-          <button class="ef-add-ch" @click="addChannel(fi)">+ канал</button>
+          <button class="ef-add-ch" @click="addChannel(fi)"><Plus :size="12" :stroke-width="2.5" /> канал</button>
         </div>
 
-        <button class="ef-add-folder" @click="addFolder">+ папка</button>
+        <button class="ef-add-folder" @click="addFolder"><Plus :size="13" :stroke-width="2.5" /> папка</button>
       </div>
 
       <div class="ep-footer">
@@ -37,6 +37,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useAppStore } from '@/stores/app'
+import { Settings, X, Trash2, Plus } from 'lucide-vue-next'
 
 const emit  = defineEmits(['close'])
 const store = useAppStore()
@@ -89,7 +90,7 @@ async function save() {
   padding: var(--space-4) var(--space-5);
   border-bottom: 1px solid var(--divider);
 }
-.ep-title { font-size: var(--text-sm); font-weight: 700; }
+.ep-title { font-size: var(--text-sm); font-weight: 700; display: flex; align-items: center; gap: 6px; }
 .ep-close {
   width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
   border-radius: var(--radius-md); font-size: .8rem; color: var(--text-muted);
@@ -131,6 +132,7 @@ async function save() {
 .ef-add-ch {
   align-self: flex-start; font-size: 11px; color: var(--accent);
   padding: 2px var(--space-2); border-radius: var(--radius-md);
+  display: flex; align-items: center; gap: 4px;
   transition: background var(--transition);
 }
 .ef-add-ch:hover { background: var(--accent-soft); }
@@ -139,6 +141,7 @@ async function save() {
   align-self: flex-start; font-size: var(--text-xs); font-weight: 600;
   color: var(--accent); padding: var(--space-2) var(--space-3);
   border: 1px dashed var(--accent-line); border-radius: var(--radius-md);
+  display: flex; align-items: center; gap: 6px;
   transition: all var(--transition);
 }
 .ef-add-folder:hover { background: var(--accent-soft); }

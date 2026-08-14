@@ -2,7 +2,7 @@
   <div class="msg-list" ref="listEl" @scroll="onScroll">
     <div v-if="canLoadMore" class="load-more">
       <button class="load-btn" @click="loadMore" :disabled="loadingMore">
-        {{ loadingMore ? 'Загружаю...' : '↑ Загрузить ещё' }}
+        <ArrowUp :size="12" :stroke-width="2.5" style="vertical-align:-1px;margin-right:4px" />{{ loadingMore ? 'Загружаю...' : 'Загрузить ещё' }}
       </button>
     </div>
 
@@ -10,6 +10,12 @@
       <div class="empty-icon">{{ store.activeChannel?.icon }}</div>
       <h3># {{ store.activeChannel?.name }}</h3>
       <p>Это начало канала. Напиши первым!</p>
+    </div>
+
+    <div v-else-if="store.activeMessages.length && !store.filteredActiveMessages.length && store.activeChId" class="empty-state">
+      <Search :size="48" />
+      <h3>Ничего не найдено</h3>
+      <p>В этом канале нет сообщений с таким фильтром</p>
     </div>
 
     <div v-if="!store.activeChId" class="empty-state">
@@ -38,7 +44,7 @@
   <!-- ── Lightbox ── -->
   <Teleport to="body">
     <div v-if="lightboxUrl" class="lightbox" @click.self="lightboxUrl = null" @keydown.esc="lightboxUrl = null" tabindex="0" ref="lightboxEl">
-      <button class="lb-close" @click="lightboxUrl = null">✕</button>
+      <button class="lb-close" @click="lightboxUrl = null"><X :size="18" :stroke-width="2.5" /></button>
       <div class="lb-img-wrap">
         <img :src="lightboxUrl" class="lb-img" :alt="lightboxAlt" @click.stop />
       </div>
@@ -51,6 +57,8 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { useAppStore } from '@/stores/app'
 import MessageItem from './MessageItem.vue'
+import { ArrowUp, X, Search } from 'lucide-vue-next'
+
 
 const store = useAppStore()
 const listEl      = ref(null)
@@ -74,7 +82,7 @@ function openLightbox({ url, alt }) {
 
 const groupedByDate = computed(() => {
   const groups = {}
-  for (const msg of store.activeMessages) {
+  for (const msg of store.filteredActiveMessages) {
     const d = new Date(msg.created_at * 1000)
     const today = new Date()
     const yesterday = new Date(today)

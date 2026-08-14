@@ -32,7 +32,7 @@
           >
             <span class="avatar" :style="{ background: u.color + '22', color: u.color }">{{ u.avatar }}</span>
             <span class="uname">{{ u.name }}</span>
-            <span class="arrow">→</span>
+            <ChevronRight class="arrow" :size="15" :stroke-width="2" />
           </button>
         </div>
 
@@ -41,7 +41,7 @@
         <div class="divider-line"><span>или создать новый</span></div>
 
         <button class="create-btn" @click="step = 'create'">
-          + Создать профиль
+          <Plus :size="15" :stroke-width="2.5" style="vertical-align:-2px;margin-right:4px" />Создать профиль
         </button>
 
         <a v-if="!isElectron" :href="downloadUrl" class="download-link" download>
@@ -51,7 +51,7 @@
 
       <!-- ═══ ШАГ 2: ввод PIN (если есть) ═══ -->
       <template v-else-if="step === 'pin'">
-        <button class="back-btn" @click="step = 'pick'; pinError = ''">← Назад</button>
+        <button class="back-btn" @click="step = 'pick'; pinError = ''"><ArrowLeft :size="12" :stroke-width="2.5" style="vertical-align:-1px;margin-right:3px" />Назад</button>
 
         <div class="pin-profile">
           <span class="avatar-lg" :style="{ background: selectedUser.color + '22', color: selectedUser.color }">
@@ -71,7 +71,7 @@
             class="pin-key"
             :class="{ ghost: n === '' }"
             @click="pinPress(n)"
-          >{{ n }}</button>
+          ><Delete v-if="n === '⌫'" :size="18" :stroke-width="2" /><template v-else>{{ n }}</template></button>
         </div>
 
         <p v-if="pinError" class="pin-error">{{ pinError }}</p>
@@ -79,7 +79,7 @@
 
       <!-- ═══ ШАГ 3: создание нового пользователя ═══ -->
       <template v-else-if="step === 'create'">
-        <button class="back-btn" @click="step = 'pick'">← Назад</button>
+        <button class="back-btn" @click="step = 'pick'"><ArrowLeft :size="12" :stroke-width="2.5" style="vertical-align:-1px;margin-right:3px" />Назад</button>
         <h1>Новый профиль</h1>
         <p class="subtitle">Настрой свой аватар и имя</p>
 
@@ -112,13 +112,13 @@
         <p v-if="createError" class="pin-error">{{ createError }}</p>
 
         <button class="login-btn" :disabled="!newName.trim()" @click="step = 'setpin'">
-          Далее →
+          Далее <ArrowRight :size="15" :stroke-width="2.5" style="vertical-align:-2px;margin-left:2px" />
         </button>
       </template>
 
       <!-- ═══ ШАГ 4: установить PIN (опционально) ═══ -->
       <template v-else-if="step === 'setpin'">
-        <button class="back-btn" @click="step = 'create'">← Назад</button>
+        <button class="back-btn" @click="step = 'create'"><ArrowLeft :size="12" :stroke-width="2.5" style="vertical-align:-1px;margin-right:3px" />Назад</button>
         <h1>Установить PIN?</h1>
         <p class="subtitle">Защити профиль 4-значным PIN-кодом. Можно пропустить.</p>
 
@@ -131,13 +131,13 @@
             class="pin-key"
             :class="{ ghost: n === '' }"
             @click="newPinPress(n)"
-          >{{ n }}</button>
+          ><Delete v-if="n === '⌫'" :size="18" :stroke-width="2" /><template v-else>{{ n }}</template></button>
         </div>
 
         <div class="setpin-actions">
           <button class="skip-btn" @click="createAndLogin(false)">Без PIN</button>
           <button class="login-btn" style="flex:1" :disabled="newPin.length < 4" @click="createAndLogin(true)">
-            <span v-if="!loading">Создать →</span>
+            <span v-if="!loading" class="login-btn-row">Создать <ArrowRight :size="15" :stroke-width="2.5" /></span>
             <span v-else>Создаём...</span>
           </button>
         </div>
@@ -151,6 +151,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
+import { ChevronRight, Plus, ArrowLeft, ArrowRight, Delete } from 'lucide-vue-next'
 
 const store  = useAppStore()
 const router = useRouter()
@@ -328,8 +329,10 @@ h1 { font-size: var(--text-xl); font-weight: 700; margin-bottom: var(--space-1);
 .back-btn {
   font-size: var(--text-xs); color: var(--text-muted); font-weight: 600;
   margin-bottom: var(--space-4); transition: color var(--transition);
+  display: inline-flex; align-items: center;
 }
 .back-btn:hover { color: var(--accent); }
+.login-btn-row { display: inline-flex; align-items: center; gap: 4px; }
 
 /* ── Скелетон ── */
 .users-loading { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-4); }
@@ -405,6 +408,7 @@ h1 { font-size: var(--text-xl); font-weight: 700; margin-bottom: var(--space-1);
   height: 56px; border-radius: var(--radius-lg);
   font-size: var(--text-lg); font-weight: 600;
   background: var(--surface-2); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
   transition: all var(--transition); color: var(--text);
 }
 .pin-key:hover:not(.ghost) { background: var(--hover); border-color: var(--accent-line); transform: scale(1.04); }

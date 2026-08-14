@@ -57,11 +57,20 @@ db.exec(`
     emoji      TEXT NOT NULL,
     UNIQUE(message_id, user_id, emoji)
   );
-  CREATE TABLE IF NOT EXISTS kanban_columns (
+  CREATE TABLE IF NOT EXISTS kanban_workspaces (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
-    title    TEXT    NOT NULL,
-    position INTEGER NOT NULL DEFAULT 0,
-    color    TEXT    NOT NULL DEFAULT '#7c6af7'
+    name     TEXT    NOT NULL,
+    icon     TEXT    NOT NULL DEFAULT '🗂',
+    sort     INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS kanban_columns (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace_id INTEGER REFERENCES kanban_workspaces(id) ON DELETE CASCADE,
+    title        TEXT    NOT NULL,
+    position     INTEGER NOT NULL DEFAULT 0,
+    color        TEXT    NOT NULL DEFAULT '#7c6af7',
+    is_terminal  INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS kanban_cards (
@@ -72,12 +81,16 @@ db.exec(`
     assignee_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     priority    TEXT    NOT NULL DEFAULT 'medium',
     position    INTEGER NOT NULL DEFAULT 0,
+    due_date    INTEGER,
+    done_at     INTEGER,
+    archived_at INTEGER,
     created_at  INTEGER DEFAULT (unixepoch())
   );
   CREATE TABLE IF NOT EXISTS kanban_subtasks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     card_id     INTEGER NOT NULL REFERENCES kanban_cards(id) ON DELETE CASCADE,
     title       TEXT    NOT NULL,
+    description TEXT,
     status      TEXT    NOT NULL DEFAULT 'todo',
     assignee_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     priority    TEXT    NOT NULL DEFAULT 'medium',
@@ -94,6 +107,28 @@ try {
   db.prepare('ALTER TABLE users ADD COLUMN description TEXT').run()
 } catch {}
 
+try {
+  db.prepare("ALTER TABLE users ADD COLUMN banner TEXT DEFAULT 'violet'").run()
+} catch {}
+
+// ─── Миграции для существующих БД (добавляем колонки, если их ещё нет) ───
+try { db.prepare('ALTER TABLE kanban_columns ADD COLUMN workspace_id INTEGER REFERENCES kanban_workspaces(id)').run() } catch {}
+try { db.prepare('ALTER TABLE kanban_columns ADD COLUMN is_terminal INTEGER NOT NULL DEFAULT 0').run() } catch {}
+try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN due_date INTEGER').run() } catch {}
+try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN done_at INTEGER').run() } catch {}
+try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN archived_at INTEGER').run() } catch {}
+try { db.prepare('ALTER TABLE kanban_subtasks ADD COLUMN description TEXT').run() } catch {}
+
+// Дефолтная рабочая зона + привязка "старых" колонок без workspace_id
+const wsCount = db.prepare('SELECT COUNT(*) as c FROM kanban_workspaces').get().c
+if (wsCount === 0) {
+  db.prepare('INSERT INTO kanban_workspaces (name, icon, sort) VALUES (?,?,?)').run('Основное', '🗂', 0)
+}
+const defaultWsId = db.prepare('SELECT id FROM kanban_workspaces ORDER BY sort LIMIT 1').get().id
+db.prepare('UPDATE kanban_columns SET workspace_id = ? WHERE workspace_id IS NULL').run(defaultWsId)
+// Помечаем колонку с названием "Done" как терминальную (для автоархива), если ещё не помечена
+db.prepare("UPDATE kanban_columns SET is_terminal = 1 WHERE is_terminal = 0 AND lower(title) = 'done'").run()
+
 function publicUserSelect(where = '') {
   return `
     SELECT
@@ -103,6 +138,7 @@ function publicUserSelect(where = '') {
       color,
       created_at,
       description,
+      banner,
       CASE WHEN pin_hash IS NOT NULL AND pin_hash != '' THEN 1 ELSE 0 END as has_pin
     FROM users
     ${where}
@@ -145,10 +181,13 @@ if (seedFolders.c === 0) {
 
 const seedKanban = db.prepare('SELECT COUNT(*) as c FROM kanban_columns').get()
 if (seedKanban.c === 0) {
-  db.prepare("INSERT INTO kanban_columns (title, position, color) VALUES (?,?,?)").run('To Do',       0, '#61afef')
-  db.prepare("INSERT INTO kanban_columns (title, position, color) VALUES (?,?,?)").run('In Progress', 1, '#e8af34')
-  db.prepare("INSERT INTO kanban_columns (title, position, color) VALUES (?,?,?)").run('Done',        2, '#4caf7d')
+  const wsId = db.prepare('SELECT id FROM kanban_workspaces ORDER BY sort LIMIT 1').get().id
+  db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'To Do',       0, '#61afef', 0)
+  db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'In Progress', 1, '#e8af34', 0)
+  db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'Done',        2, '#4caf7d', 1)
 }
+
+const ARCHIVE_AFTER_MS = (Number(process.env.KANBAN_ARCHIVE_AFTER_DAYS) || 3) * 86400
 
 function updateFolders(folders) {
   const transaction = db.transaction(() => {
@@ -284,53 +323,140 @@ module.exports = {
   },
   updateFolders,
   kanban: {
-    getBoard: () => {
-      const columns = db.prepare('SELECT * FROM kanban_columns ORDER BY position').all()
-      const cards   = db.prepare(`
-        SELECT k.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
+    // ── Рабочие зоны ──────────────────────────────────────
+    getWorkspaces: () => db.prepare('SELECT * FROM kanban_workspaces ORDER BY sort').all(),
+    createWorkspace: (name, icon) => {
+      const pos = db.prepare('SELECT COUNT(*) as c FROM kanban_workspaces').get().c
+      const r = db.prepare('INSERT INTO kanban_workspaces (name, icon, sort) VALUES (?,?,?)')
+        .run(name || 'Новая зона', icon || '🗂', pos)
+      const wsId = r.lastInsertRowid
+      // Новой зоне сразу даём стандартный набор колонок
+      db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'To Do', 0, '#61afef', 0)
+      db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'In Progress', 1, '#e8af34', 0)
+      db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'Done', 2, '#4caf7d', 1)
+      return db.prepare('SELECT * FROM kanban_workspaces WHERE id=?').get(wsId)
+    },
+    updateWorkspace: (id, { name, icon }) => {
+      db.prepare('UPDATE kanban_workspaces SET name=COALESCE(?,name), icon=COALESCE(?,icon) WHERE id=?')
+        .run(name || null, icon || null, id)
+      return db.prepare('SELECT * FROM kanban_workspaces WHERE id=?').get(id)
+    },
+    deleteWorkspace: (id) => {
+      const total = db.prepare('SELECT COUNT(*) as c FROM kanban_workspaces').get().c
+      if (total <= 1) return { ok: false, error: 'Нельзя удалить последнюю рабочую зону' }
+      db.prepare('DELETE FROM kanban_workspaces WHERE id=?').run(id)
+      return { ok: true }
+    },
+
+    // ── Доска ─────────────────────────────────────────────
+    getBoard: (workspaceId) => {
+      const columns = workspaceId
+        ? db.prepare('SELECT * FROM kanban_columns WHERE workspace_id=? ORDER BY position').all(workspaceId)
+        : db.prepare('SELECT * FROM kanban_columns ORDER BY position').all()
+      const colIds = columns.map(c => c.id)
+      if (!colIds.length) return columns.map(col => ({ ...col, cards: [] }))
+      const placeholders = colIds.map(() => '?').join(',')
+      const cards = db.prepare(`
+        SELECT k.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color,
+          (SELECT COUNT(*) FROM kanban_subtasks s WHERE s.card_id = k.id) as subtasks_total,
+          (SELECT COUNT(*) FROM kanban_subtasks s WHERE s.card_id = k.id AND s.status = 'done') as subtasks_done
         FROM kanban_cards k
         LEFT JOIN users u ON k.assignee_id = u.id
+        WHERE k.archived_at IS NULL AND k.column_id IN (${placeholders})
         ORDER BY k.position
-      `).all()
+      `).all(...colIds)
       return columns.map(col => ({
         ...col,
         cards: cards.filter(c => c.column_id === col.id)
       }))
     },
-    createCard: (column_id, title, description, assignee_id, priority) => {
+    getArchivedCards: (workspaceId) => {
+      const columns = workspaceId
+        ? db.prepare('SELECT id FROM kanban_columns WHERE workspace_id=?').all(workspaceId)
+        : db.prepare('SELECT id FROM kanban_columns').all()
+      const colIds = columns.map(c => c.id)
+      if (!colIds.length) return []
+      const placeholders = colIds.map(() => '?').join(',')
+      return db.prepare(`
+        SELECT k.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
+        FROM kanban_cards k
+        LEFT JOIN users u ON k.assignee_id = u.id
+        WHERE k.archived_at IS NOT NULL AND k.column_id IN (${placeholders})
+        ORDER BY k.archived_at DESC
+      `).all(...colIds)
+    },
+    createCard: (column_id, title, description, assignee_id, priority, due_date) => {
       const pos = db.prepare('SELECT COUNT(*) as c FROM kanban_cards WHERE column_id=?').get(column_id).c
-      const r   = db.prepare(`
-        INSERT INTO kanban_cards (column_id, title, description, assignee_id, priority, position)
-        VALUES (?,?,?,?,?,?)
-      `).run(column_id, title, description || null, assignee_id || null, priority || 'medium', pos)
+      const isTerminal = db.prepare('SELECT is_terminal FROM kanban_columns WHERE id=?').get(column_id)?.is_terminal
+      const r = db.prepare(`
+        INSERT INTO kanban_cards (column_id, title, description, assignee_id, priority, position, due_date, done_at)
+        VALUES (?,?,?,?,?,?,?,?)
+      `).run(column_id, title, description || null, assignee_id || null, priority || 'medium', pos,
+             due_date || null, isTerminal ? Math.floor(Date.now() / 1000) : null)
       return db.prepare(`
         SELECT k.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
         FROM kanban_cards k LEFT JOIN users u ON k.assignee_id = u.id WHERE k.id=?
       `).get(r.lastInsertRowid)
     },
-    updateCard: (id, { title, description, assignee_id, priority }) => {
+    updateCard: (id, { title, description, assignee_id, priority, column_id, due_date }) => {
+      const current = db.prepare('SELECT column_id, done_at FROM kanban_cards WHERE id=?').get(id)
+      let doneAt = current?.done_at ?? null
+      if (column_id && column_id !== current?.column_id) {
+        const isTerminal = db.prepare('SELECT is_terminal FROM kanban_columns WHERE id=?').get(column_id)?.is_terminal
+        doneAt = isTerminal ? Math.floor(Date.now() / 1000) : null
+      }
       db.prepare(`
         UPDATE kanban_cards SET
           title       = COALESCE(?, title),
           description = COALESCE(?, description),
           assignee_id = ?,
-          priority    = COALESCE(?, priority)
+          priority    = COALESCE(?, priority),
+          column_id   = COALESCE(?, column_id),
+          due_date    = ?,
+          done_at     = ?
         WHERE id = ?
-      `).run(title || null, description || null, assignee_id ?? null, priority || null, id)
+      `).run(title || null, description || null, assignee_id ?? null, priority || null,
+             column_id || null, due_date ?? null, doneAt, id)
       return db.prepare(`
         SELECT k.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
         FROM kanban_cards k LEFT JOIN users u ON k.assignee_id = u.id WHERE k.id=?
       `).get(id)
     },
     moveCard: (id, column_id, position) => {
-      db.prepare('UPDATE kanban_cards SET column_id=?, position=? WHERE id=?').run(column_id, position, id)
+      const isTerminal = db.prepare('SELECT is_terminal FROM kanban_columns WHERE id=?').get(column_id)?.is_terminal
+      db.prepare('UPDATE kanban_cards SET column_id=?, position=?, done_at=? WHERE id=?')
+        .run(column_id, position, isTerminal ? Math.floor(Date.now() / 1000) : null, id)
     },
     deleteCard: (id) => {
       db.prepare('DELETE FROM kanban_cards WHERE id=?').run(id)
     },
+    archiveCard: (id) => db.prepare('UPDATE kanban_cards SET archived_at=? WHERE id=?').run(Math.floor(Date.now() / 1000), id),
+    unarchiveCard: (id) => db.prepare('UPDATE kanban_cards SET archived_at=NULL WHERE id=?').run(id),
+    // Автоархив: карточки, лежащие в терминальной колонке дольше ARCHIVE_AFTER_MS
+    autoArchiveStale: () => {
+      const cutoff = Math.floor(Date.now() / 1000) - ARCHIVE_AFTER_MS
+      const r = db.prepare(`
+        UPDATE kanban_cards SET archived_at = unixepoch()
+        WHERE archived_at IS NULL AND done_at IS NOT NULL AND done_at < ?
+      `).run(cutoff)
+      return r.changes
+    },
     reorderCards: (cards) => {
-      const stmt = db.prepare('UPDATE kanban_cards SET column_id=?, position=? WHERE id=?')
-      const run  = db.transaction(() => cards.forEach((c, i) => stmt.run(c.column_id, i, c.id)))
+      const colTerminal = {}
+      const stmt = db.prepare('UPDATE kanban_cards SET column_id=?, position=?, done_at=? WHERE id=?')
+      const run = db.transaction(() => {
+        cards.forEach((c, i) => {
+          if (!(c.column_id in colTerminal)) {
+            colTerminal[c.column_id] = db.prepare('SELECT is_terminal FROM kanban_columns WHERE id=?').get(c.column_id)?.is_terminal
+          }
+          const current = db.prepare('SELECT column_id, done_at FROM kanban_cards WHERE id=?').get(c.id)
+          let doneAt = current?.done_at ?? null
+          if (current?.column_id !== c.column_id) {
+            doneAt = colTerminal[c.column_id] ? Math.floor(Date.now() / 1000) : null
+          }
+          stmt.run(c.column_id, i, doneAt, c.id)
+        })
+      })
       run()
     },
     getCard: (id) => {
@@ -346,26 +472,27 @@ module.exports = {
       `).all(id)
       return card
     },
-    createSubtask: (card_id, title, assignee_id, priority) => {
+    createSubtask: (card_id, title, assignee_id, priority, description) => {
       const pos = db.prepare('SELECT COUNT(*) as c FROM kanban_subtasks WHERE card_id=?').get(card_id).c
       const r = db.prepare(`
-        INSERT INTO kanban_subtasks (card_id, title, assignee_id, priority, position)
-        VALUES (?,?,?,?,?)
-      `).run(card_id, title, assignee_id || null, priority || 'medium', pos)
+        INSERT INTO kanban_subtasks (card_id, title, description, assignee_id, priority, position)
+        VALUES (?,?,?,?,?,?)
+      `).run(card_id, title, description || null, assignee_id || null, priority || 'medium', pos)
       return db.prepare(`
         SELECT s.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
         FROM kanban_subtasks s LEFT JOIN users u ON s.assignee_id = u.id WHERE s.id=?
       `).get(r.lastInsertRowid)
     },
-    updateSubtask: (id, { title, status, assignee_id, priority }) => {
+    updateSubtask: (id, { title, status, assignee_id, priority, description }) => {
       db.prepare(`
         UPDATE kanban_subtasks SET
           title       = COALESCE(?, title),
+          description = COALESCE(?, description),
           status      = COALESCE(?, status),
           assignee_id = ?,
           priority    = COALESCE(?, priority)
         WHERE id = ?
-      `).run(title || null, status || null, assignee_id ?? null, priority || null, id)
+      `).run(title || null, description || null, status || null, assignee_id ?? null, priority || null, id)
       return db.prepare(`
         SELECT s.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
         FROM kanban_subtasks s LEFT JOIN users u ON s.assignee_id = u.id WHERE s.id=?
