@@ -97,6 +97,13 @@ db.exec(`
     position    INTEGER NOT NULL DEFAULT 0,
     created_at  INTEGER DEFAULT (unixepoch())
   );
+
+  CREATE TABLE IF NOT EXISTS admin_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    action     TEXT    NOT NULL,
+    details    TEXT,
+    created_at INTEGER DEFAULT (unixepoch())
+  );
 `)
 
 try {
@@ -322,6 +329,12 @@ module.exports = {
     }
   },
   updateFolders,
+  logAdmin: (action, details) => {
+    db.prepare('INSERT INTO admin_log (action, details) VALUES (?,?)')
+      .run(action, details ? JSON.stringify(details) : null)
+  },
+  getAdminLog: (limit = 50) =>
+    db.prepare('SELECT * FROM admin_log ORDER BY created_at DESC LIMIT ?').all(limit),
   kanban: {
     // ── Рабочие зоны ──────────────────────────────────────
     getWorkspaces: () => db.prepare('SELECT * FROM kanban_workspaces ORDER BY sort').all(),

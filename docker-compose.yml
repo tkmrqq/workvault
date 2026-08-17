@@ -1,6 +1,6 @@
 services:
   workvault:
-    build: .
+    image: ghcr.io/tkmrqq/workvault:latest
     ports:
       - "3000:3000"
     volumes:
@@ -17,6 +17,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+  
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:latest
     container_name: cadvisor
@@ -32,6 +33,7 @@ services:
       - /dev/kmsg
     privileged: true
     restart: unless-stopped
+  
   blackbox:
     image: prom/blackbox-exporter:latest
     container_name: blackbox

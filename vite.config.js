@@ -11,10 +11,18 @@ export default defineConfig(({ mode }) => {
     plugins: [vue()],
     base: isElectron ? './' : '/',   // ← единственное добавление
     resolve: { alias: { '@': resolve(__dirname, 'src') } },
+    optimizeDeps: {
+      // lucide-vue-next — огромный пакет с кучей именованных экспортов;
+      // без явного include Vite пересобирает dep-кэш при каждой новой
+      // иконке, которую раньше не встречал, и это ощущается как подвисание
+      // при переходе на страницы, где появился новый импорт иконки.
+      include: ['lucide-vue-next']
+    },
     server: {
       port: 5173,
       proxy: {
         '/api':       { target: API, changeOrigin: true },
+        '/admin':     { target: API, changeOrigin: true },
         '/uploads':   { target: API, changeOrigin: true },
         '/socket.io': { target: API, changeOrigin: true, ws: true }
       }

@@ -134,9 +134,9 @@
                 v-for="col in subtaskCols"
                 :key="col.status"
                 class="sub-col"
-                @dragover.prevent="subDragOverCol = col.status"
-                @drop="onSubDrop($event, col.status)"
-                :class="{ 'drag-over': subDragOverCol === col.status }"
+                @dragover.prevent="onSubColDragOver($event, col)"
+                @drop.prevent="onSubDrop($event, col.status)"
+                :class="{ 'drag-over': subDragOverCol.status === col.status }"
               >
                 <div class="sub-col-header">
                   <div class="col-dot" :style="{ background: col.color }"></div>
@@ -145,13 +145,14 @@
                 </div>
 
                 <div class="sub-col-cards">
+                  <div v-if="subDragOverCol.status === col.status" class="drop-line" :style="{ top: subDragOverCol.y + 'px' }"></div>
                   <div
                     v-for="sub in col.items"
                     :key="sub.id"
                     class="sub-card"
                     draggable="true"
                     @dragstart="onSubDragStart($event, sub)"
-                    @dragend="subDragging = null; subDragOverCol = null"
+                    @dragend="onSubDragEnd"
                     :class="{ dragging: subDragging?.id === sub.id }"
                     @click="openEditSubtask(sub)"
                   >
@@ -168,7 +169,7 @@
                       {{ sub.assignee_name }}
                     </div>
                   </div>
-                  <div v-if="subDragOverCol === col.status && subDragging" class="drop-placeholder"></div>
+                  <div v-if="!col.items.length" class="sub-col-empty">Перетащите сюда</div>
                 </div>
               </div>
             </div>
@@ -178,6 +179,13 @@
 
       <div v-else class="loading">Загружаем задачу...</div>
     </div>
+
+    <!-- Error toast -->
+    <Teleport to="body">
+      <Transition name="toast-fade">
+        <div v-if="apiError" class="api-error-toast">{{ apiError }}</div>
+      </Transition>
+    </Teleport>
 
     <!-- Subtask modal -->
     <Teleport to="body">
@@ -189,7 +197,7 @@
           </div>
           <div class="modal-body">
             <label class="field-label">Название *</label>
-            <input v-model="subModal.title" class="field-input" placeholder="Что нужно сделать?" autofocus @keydown.enter="saveSubtask" />
+            <input v-model="subModal.title" class="field-input" placeholder="Что нужно сделать?" autofocus @keydown.enter="saveSubtask" @keydown.esc="subModal.open = false" />
 
             <label class="field-label">Описание</label>
             <textarea v-model="subModal.description" class="field-textarea" placeholder="Подробности..." rows="3" />
@@ -243,6 +251,28 @@ const route  = useRoute()
 const router = useRouter()
 const API    = import.meta.env.VITE_API_URL || ''
 
+// ─── Сетевые запросы с обработкой ошибок ───────────────────
+const apiError = ref('')
+let apiErrorTimer = null
+function showApiError(msg) {
+  apiError.value = msg
+  clearTimeout(apiErrorTimer)
+  apiErrorTimer = setTimeout(() => { apiError.value = '' }, 4000)
+}
+async function apiFetch(url, options) {
+  try {
+    const r = await fetch(url, options)
+    if (!r.ok) {
+      showApiError('Не удалось сохранить изменения. Проверьте соединение.')
+      return null
+    }
+    return r
+  } catch (e) {
+    showApiError('Не удалось сохранить изменения. Проверьте соединение.')
+    return null
+  }
+}
+
 const card    = ref(null)
 const users   = ref([])
 const columns = ref([])
@@ -273,32 +303,75 @@ const isOverdue = computed(() => card.value?.due_date && card.value.due_date * 1
 
 // ─── Drag & Drop subtasks ─────────────────────────────────
 const subDragging    = ref(null)
-const subDragOverCol = ref(null)
+const subDragOverCol = reactive({ status: null, index: null, y: 0 })
 
 function onSubDragStart(e, sub) {
   subDragging.value = sub
   e.dataTransfer.effectAllowed = 'move'
 }
+function onSubDragEnd() {
+  subDragging.value = null
+  subDragOverCol.status = null
+}
+function onSubColDragOver(e, col) {
+  if (!subDragging.value) return
+  const container = e.currentTarget.querySelector('.sub-col-cards')
+  const containerRect = container.getBoundingClientRect()
+  const cardEls = [...container.querySelectorAll('.sub-card:not(.dragging)')]
+  let index = cardEls.length
+  let y = null
+  for (let i = 0; i < cardEls.length; i++) {
+    const rect = cardEls[i].getBoundingClientRect()
+    if (e.clientY < rect.top + rect.height / 2) {
+      index = i
+      y = rect.top - containerRect.top - 4
+      break
+    }
+  }
+  if (y === null) {
+    y = cardEls.length
+      ? cardEls[cardEls.length - 1].getBoundingClientRect().bottom - containerRect.top + 4
+      : 8
+  }
+  subDragOverCol.status = col.status
+  subDragOverCol.index = index
+  subDragOverCol.y = y
+}
 async function onSubDrop(e, status) {
   if (!subDragging.value) return
   const sub = subDragging.value
-  subDragging.value = null; subDragOverCol.value = null
+  const targetStatus = subDragOverCol.status ?? status
+  let insertIndex = subDragOverCol.index ?? 0
+  subDragging.value = null; subDragOverCol.status = null
 
-  // Оптимистично
-  card.value.subtasks = card.value.subtasks.map(s =>
-    s.id === sub.id ? { ...s, status } : s
-  )
+  const previousSubtasks = card.value.subtasks
+
+  // Оптимистично: убираем подзадачу из старого места и вставляем в новое,
+  // индекс уже посчитан по карточкам БЕЗ учёта перетаскиваемой (см. onSubColDragOver)
+  const all = [...card.value.subtasks]
+  const sourceIdx = all.findIndex(s => s.id === sub.id)
+  if (sourceIdx !== -1) all.splice(sourceIdx, 1)
+
+  const targetItems = all.filter(s => s.status === targetStatus)
+  insertIndex = Math.max(0, Math.min(insertIndex, targetItems.length))
+  const targetBefore = targetItems[insertIndex]
+  const updatedSub = { ...sub, status: targetStatus }
+  const insertAt = targetBefore ? all.findIndex(s => s.id === targetBefore.id) : all.length
+  all.splice(insertAt, 0, updatedSub)
+  card.value.subtasks = all
+
   // Реорганизуем позиции
   const payload = []
   STATUSES.forEach(col => {
     card.value.subtasks.filter(s => s.status === col.status)
       .forEach((s, i) => payload.push({ id: s.id, status: s.status, card_id: s.card_id }))
   })
-  await fetch(`${API}/api/kanban/subtasks/reorder`, {
+  const r = await apiFetch(`${API}/api/kanban/subtasks/reorder`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   })
+  if (!r) card.value.subtasks = previousSubtasks // откат при ошибке сети/сервера
 }
 
 // ─── Card edit ────────────────────────────────────────────
@@ -320,25 +393,29 @@ function startEdit() {
   edit.due_date    = tsToDate(card.value.due_date)
 }
 async function saveCard() {
-  await fetch(`${API}/api/kanban/cards/${card.value.id}`, {
+  const r = await apiFetch(`${API}/api/kanban/cards/${card.value.id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...edit, due_date: dateToTs(edit.due_date) })
   })
+  if (!r) return // оставляем форму открытой, чтобы не потерять введённое
   editMode.value = false
   await loadCard()
 }
 async function deleteCard() {
   if (!confirm('Удалить задачу и все подзадачи?')) return
-  await fetch(`${API}/api/kanban/cards/${card.value.id}`, { method: 'DELETE' })
+  const r = await apiFetch(`${API}/api/kanban/cards/${card.value.id}`, { method: 'DELETE' })
+  if (!r) return
   router.push('/kanban')
 }
 async function archive() {
-  await fetch(`${API}/api/kanban/cards/${card.value.id}/archive`, { method: 'POST' })
+  const r = await apiFetch(`${API}/api/kanban/cards/${card.value.id}/archive`, { method: 'POST' })
+  if (!r) return
   await loadCard()
 }
 async function unarchive() {
-  await fetch(`${API}/api/kanban/cards/${card.value.id}/unarchive`, { method: 'POST' })
+  const r = await apiFetch(`${API}/api/kanban/cards/${card.value.id}/unarchive`, { method: 'POST' })
+  if (!r) return
   await loadCard()
 }
 
@@ -366,31 +443,32 @@ async function saveSubtask() {
     priority: subModal.priority,
     assignee_id: subModal.assignee_id
   }
-  if (subModal.mode === 'create') {
-    await fetch(`${API}/api/kanban/cards/${card.value.id}/subtasks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    })
-  } else {
-    await fetch(`${API}/api/kanban/subtasks/${subModal.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    })
-  }
+  const r = subModal.mode === 'create'
+    ? await apiFetch(`${API}/api/kanban/cards/${card.value.id}/subtasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+    : await apiFetch(`${API}/api/kanban/subtasks/${subModal.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+  if (!r) return // модалка остаётся открытой, ничего не потеряно
   subModal.open = false
   await loadCard()
 }
 async function deleteSubtask() {
-  await fetch(`${API}/api/kanban/subtasks/${subModal.id}`, { method: 'DELETE' })
+  const r = await apiFetch(`${API}/api/kanban/subtasks/${subModal.id}`, { method: 'DELETE' })
+  if (!r) return
   subModal.open = false
   await loadCard()
 }
 
 // ─── Data ─────────────────────────────────────────────────
 async function loadCard() {
-  const r = await fetch(`${API}/api/kanban/cards/${route.params.cardId}`)
+  const r = await apiFetch(`${API}/api/kanban/cards/${route.params.cardId}`)
+  if (!r) return
   card.value = await r.json()
 }
 
@@ -409,17 +487,19 @@ onMounted(async () => {
   if (!store.user) { router.push('/'); return }
   if (!store.folders.length) await store.fetchFolders()
   await loadCard()
-  startEdit()
+  if (card.value) startEdit()
   const [ur, br] = await Promise.all([
-    fetch(`${API}/api/users`),
-    fetch(`${API}/api/kanban`)
+    apiFetch(`${API}/api/users`),
+    apiFetch(`${API}/api/kanban`)
   ])
-  users.value   = await ur.json()
-  columns.value = (await br.json())
+  if (ur) users.value   = await ur.json()
+  if (br) columns.value = await br.json()
   const socket = store.getSocket()
   if (socket) {
     socket.on('kanban:card:update', (cardId) => {
-      if (String(cardId) === String(route.params.cardId)) loadCard()
+      if (String(cardId) !== String(route.params.cardId)) return
+      if (subDragging.value) return // не дёргаем карточку во время перетаскивания подзадачи
+      loadCard()
     })
     offSocket = () => socket.off('kanban:card:update')
   }
@@ -605,11 +685,41 @@ onUnmounted(() => offSocket?.())
   padding: 1px 6px; border-radius: 20px;
 }
 .sub-col-cards {
+  position: relative;
   display: flex; flex-direction: column; gap: 6px;
   padding: 4px 8px 10px; overflow-y: auto; flex: 1;
 }
 .sub-col-cards::-webkit-scrollbar { width: 3px; }
 .sub-col-cards::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.drop-line {
+  position: absolute; left: 8px; right: 8px;
+  height: 3px; border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 5;
+  transition: top .08s ease;
+}
+.drop-line::before {
+  content: ''; position: absolute; left: -4px; top: -3px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent);
+}
+.sub-col-empty {
+  margin: 4px 4px 8px; padding: 14px 8px;
+  border: 1.5px dashed var(--border); border-radius: var(--radius-md);
+  text-align: center; font-size: 11px; color: var(--text-faint);
+}
+
+/* Error toast */
+.api-error-toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+  background: #e06c75; color: #fff; font-size: var(--text-sm); font-weight: 600;
+  padding: 10px 18px; border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg); z-index: 2000;
+}
+.toast-fade-enter-active, .toast-fade-leave-active { transition: opacity .2s ease, transform .2s ease; }
+.toast-fade-enter-from, .toast-fade-leave-to { opacity: 0; transform: translateX(-50%) translateY(6px); }
 
 .sub-card {
   background: var(--surface-2); border: 1px solid var(--border);
@@ -636,11 +746,6 @@ onUnmounted(() => offSocket?.())
 .assignee-avatar-sm {
   width: 18px; height: 18px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center; font-size: .7rem; flex-shrink: 0;
-}
-
-.drop-placeholder {
-  height: 48px; border-radius: var(--radius-md);
-  border: 2px dashed var(--accent-line); background: var(--accent-soft); flex-shrink: 0;
 }
 
 /* Modal */

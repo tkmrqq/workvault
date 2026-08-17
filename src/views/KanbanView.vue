@@ -27,7 +27,7 @@
             @click="switchWorkspace(ws.id)"
             @dblclick="renameWorkspace(ws)"
           >
-            <!-- <span>{{ ws.icon }}</span> --> <Folder :size="16"/> {{ ws.name }}
+            <span>{{ ws.icon }}</span> {{ ws.name }}
             <X v-if="workspaces.length > 1" class="ws-tab-del" @click.stop="removeWorkspace(ws)" :size="11" :stroke-width="2.5" />
           </button>
           <button class="ws-tab ws-tab-add" @click="addWorkspace" title="Новая рабочая зона"><Plus :size="13" :stroke-width="2.5" /></button>
@@ -54,17 +54,16 @@
 
             <!-- Cards -->
             <div class="col-cards">
-              <template v-for="(card, idx) in col.cards" :key="card.id">
-                <div v-if="dragOverInfo.colId === col.id && dragOverInfo.index === idx && draggingCard?.id !== card.id" class="drop-placeholder"></div>
-                <div
-                  class="kanban-card"
-                  draggable="true"
-                  @dragstart="onDragStart($event, card)"
-                  @dragend="onDragEnd"
-                  @dragover.prevent.stop="onCardDragOver($event, col, idx)"
-                  :class="{ dragging: draggingCard?.id === card.id }"
-                  @click="openEdit(card)"
-                >
+              <div v-if="dragOverInfo.colId === col.id" class="drop-line" :style="{ top: dragOverInfo.y + 'px' }"></div>
+              <div
+                v-for="card in col.cards" :key="card.id"
+                class="kanban-card"
+                draggable="true"
+                @dragstart="onDragStart($event, card)"
+                @dragend="onDragEnd"
+                :class="{ dragging: draggingCard?.id === card.id }"
+                @click="openEdit(card)"
+              >
                   <div class="card-top-row">
                     <div class="card-priority" :class="card.priority">
                       <component :is="priorityIcon(card.priority)" :size="10" :stroke-width="3" />{{ priorityLabel(card.priority) }}
@@ -91,11 +90,7 @@
                     </div>
                     <div v-else class="card-assignee-empty">Не назначено</div>
                   </div>
-                </div>
-              </template>
-
-              <!-- Placeholder at the end of column -->
-              <div v-if="dragOverInfo.colId === col.id && dragOverInfo.index === col.cards.length" class="drop-placeholder"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -175,8 +170,8 @@
             <div class="modal-footer-right">
               <button v-if="modal.mode === 'edit'" class="btn-archive-card" @click="archiveCard"><Archive :size="13" :stroke-width="2" /> В архив</button>
               <button class="btn-cancel" @click="closeModal">Отмена</button>
-              <button class="btn-save" :disabled="!modal.title.trim()" @click="saveCard">
-                {{ modal.mode === 'create' ? 'Создать' : 'Сохранить' }}
+              <button class="btn-save" :disabled="!modal.title.trim() || modal.submitting" @click="saveCard">
+                {{ modal.submitting ? 'Сохраняю...' : (modal.mode === 'create' ? 'Создать' : 'Сохранить') }}
               </button>
             </div>
           </div>
@@ -219,7 +214,7 @@ import TitleBar from '@/components/TitleBar.vue'
 import Sidebar  from '@/components/Sidebar.vue'
 import {
   Archive, Plus, X, Check, Calendar, RotateCcw,
-  LayoutDashboard, ArrowDown, ArrowRight, ArrowUp, Folder
+  LayoutDashboard, ArrowDown, ArrowRight, ArrowUp
 } from 'lucide-vue-next'
 
 const store  = useAppStore()
@@ -233,8 +228,7 @@ const activeWorkspaceId = ref(null)
 
 // ─── Drag & Drop ─────────────────────────────────────────
 const draggingCard = ref(null)
-const dragOverInfo  = reactive({ colId: null, index: null })
-const suppressNextUpdate = ref(false)
+const dragOverInfo  = reactive({ colId: null, index: null, y: 0 })
 
 function onDragStart(e, card) {
   draggingCard.value = card
@@ -243,42 +237,55 @@ function onDragStart(e, card) {
   // но лучше подстраховаться для кросс-браузерности
   e.dataTransfer.setData('text/plain', String(card.id))
 }
-
 function onDragEnd() {
   draggingCard.value = null
   dragOverInfo.colId = null
   dragOverInfo.index = null
 }
-
-function onCardDragOver(e, col, idx) {
-  if (!draggingCard.value) return
-  const rect = e.currentTarget.getBoundingClientRect()
-  const before = (e.clientY - rect.top) < rect.height / 2
-  dragOverInfo.colId = col.id
-  dragOverInfo.index = before ? idx : idx + 1
-}
-
+// Единый обработчик на колонку. Раньше был ещё отдельный на каждую карточку,
+// но плейсхолдер-вставка сам оказывался под курсором и перехватывал dragover,
+// сбрасывая позицию на "конец колонки" — из-за этого сортировка внутри одной
+// колонки постоянно сбивалась. Теперь просто меряем позиции карточек напрямую.
 function onColDragOver(e, col) {
   if (!draggingCard.value) return
-  // Срабатывает только когда курсор НЕ над конкретной карточкой (те стопают всплытие)
+  const container = e.currentTarget.querySelector('.col-cards')
+  const containerRect = container.getBoundingClientRect()
+  const cardEls = [...container.querySelectorAll('.kanban-card:not(.dragging)')]
+  let index = cardEls.length
+  let y = null
+  for (let i = 0; i < cardEls.length; i++) {
+    const rect = cardEls[i].getBoundingClientRect()
+    if (e.clientY < rect.top + rect.height / 2) {
+      index = i
+      y = rect.top - containerRect.top - 4
+      break
+    }
+  }
+  if (y === null) {
+    y = cardEls.length
+      ? cardEls[cardEls.length - 1].getBoundingClientRect().bottom - containerRect.top + 4
+      : 8
+  }
   dragOverInfo.colId = col.id
-  dragOverInfo.index = col.cards.length
+  dragOverInfo.index = index
+  dragOverInfo.y = y
 }
-
 async function onDrop(e, colId) {
   if (!draggingCard.value) return
   const card = draggingCard.value
-  let insertIndex = dragOverInfo.index ?? 0
   const targetColId = dragOverInfo.colId ?? colId
+  let insertIndex = dragOverInfo.index ?? 0
   draggingCard.value = null
   dragOverInfo.colId = null
   dragOverInfo.index = null
 
+  // Индекс уже посчитан по карточкам БЕЗ учёта перетаскиваемой (см. onColDragOver),
+  // поэтому просто убираем её из старого места и вставляем в новое — без дополнительной
+  // подгонки индекса.
   const sourceCol = board.value.find(c => c.cards.some(cc => cc.id === card.id))
   if (sourceCol) {
     const sourceIdx = sourceCol.cards.findIndex(cc => cc.id === card.id)
     sourceCol.cards.splice(sourceIdx, 1)
-    if (sourceCol.id === targetColId && sourceIdx < insertIndex) insertIndex--
   }
   const targetCol = board.value.find(c => c.id === targetColId)
   if (targetCol) {
@@ -288,8 +295,6 @@ async function onDrop(e, colId) {
 
   const payload = []
   board.value.forEach(col => col.cards.forEach(c => payload.push({ id: c.id, column_id: col.id })))
-
-  suppressNextUpdate.value = true
   await fetch(`${API}/api/kanban/cards/reorder`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -299,13 +304,13 @@ async function onDrop(e, colId) {
 
 // ─── Modal ────────────────────────────────────────────────
 const modal = reactive({
-  open: false, mode: 'create',
+  open: false, mode: 'create', submitting: false,
   id: null, column_id: null,
   title: '', description: '', priority: 'medium', assignee_id: null, due_date: ''
 })
 
 function openCreate(colId) {
-  modal.open = true; modal.mode = 'create'
+  modal.open = true; modal.mode = 'create'; modal.submitting = false
   modal.id = null
   modal.column_id = colId || board.value[0]?.id
   modal.title = ''; modal.description = ''
@@ -322,7 +327,8 @@ function dateToTs(dateStr) {
 }
 
 async function saveCard() {
-  if (!modal.title.trim()) return
+  if (!modal.title.trim() || modal.submitting) return
+  modal.submitting = true
   const body = {
     column_id:   modal.column_id,
     title:       modal.title.trim(),
@@ -332,21 +338,25 @@ async function saveCard() {
     due_date:    dateToTs(modal.due_date),
     workspace_id: activeWorkspaceId.value
   }
-  if (modal.mode === 'create') {
-    await fetch(`${API}/api/kanban/cards`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    })
-  } else {
-    await fetch(`${API}/api/kanban/cards/${modal.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    })
+  try {
+    if (modal.mode === 'create') {
+      await fetch(`${API}/api/kanban/cards`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+    } else {
+      await fetch(`${API}/api/kanban/cards/${modal.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+    }
+    closeModal()
+    await loadBoard()
+  } finally {
+    modal.submitting = false
   }
-  closeModal()
-  await loadBoard()
 }
 
 async function deleteCard() {
@@ -464,10 +474,7 @@ onMounted(async () => {
   const socket = store.getSocket()
   if (socket) {
     socket.on('kanban:update', (payload) => {
-      if (suppressNextUpdate.value) {
-        suppressNextUpdate.value = false
-        return
-      }
+      // payload может прийти без board (после автоархива) — просто перезагружаем
       if (!payload || payload.workspace_id === activeWorkspaceId.value || payload.workspace_id == null) {
         loadBoard()
       }
@@ -600,6 +607,7 @@ onUnmounted(() => { offKanban?.(); offWs?.() })
 }
 .col-add-btn:hover { background: var(--hover); color: var(--accent); }
 .col-cards {
+  position: relative;
   display: flex; flex-direction: column; gap: 8px;
   padding: 4px 10px 12px;
   overflow-y: auto; flex: 1;
@@ -668,11 +676,18 @@ onUnmounted(() => { offKanban?.(); offWs?.() })
 .assignee-name { font-size: 11px; color: var(--text-muted); }
 .card-assignee-empty { font-size: 11px; color: var(--text-faint); }
 
-.drop-placeholder {
-  height: 60px; border-radius: var(--radius-md);
-  border: 2px dashed var(--accent-line);
-  background: var(--accent-soft);
-  flex-shrink: 0;
+.drop-line {
+  position: absolute; left: 10px; right: 10px;
+  height: 3px; border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 5;
+  transition: top .08s ease;
+}
+.drop-line::before {
+  content: ''; position: absolute; left: -4px; top: -3px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent);
 }
 
 /* ── Empty ── */
