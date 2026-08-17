@@ -6,10 +6,13 @@ HEALTH_URL="http://127.0.0.1:${APP_PORT}/health"
 MAX_ATTEMPTS=12
 SLEEP_SECONDS=3
 
-echo "==> Rebuilding and restarting WorkVault"
-docker compose up -d --build --remove-orphans
+echo "==> Pulling latest WorkVault image"
+docker compose pull workvault
 
-echo "==> Removing dangling Docker images"
+echo "==> Recreating WorkVault container"
+docker compose up -d --remove-orphans workvault
+
+echo "==> Cleaning up old images"
 docker image prune -f
 
 echo "==> Current containers"
