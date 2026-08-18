@@ -15,7 +15,7 @@
     "deploy": "cross-env BUILD_TARGET=electron vite build && electron-builder --publish always"
   },
   "dependencies": {
-    "better-sqlite3": "^13.0.3",
+    "better-sqlite3": "^11.10.0",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "electron-updater": "^6.8.3",
