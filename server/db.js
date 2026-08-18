@@ -2,6 +2,7 @@ const Database = require('better-sqlite3')
 const path = require('path')
 const fs = require('fs')
 const crypto = require('crypto')
+const config = require('./config')
 
 const DATA_DIR = path.join(__dirname, '../data')
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
@@ -194,7 +195,7 @@ if (seedKanban.c === 0) {
   db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'Done',        2, '#4caf7d', 1)
 }
 
-const ARCHIVE_AFTER_MS = (Number(process.env.KANBAN_ARCHIVE_AFTER_DAYS) || 3) * 86400
+const ARCHIVE_AFTER_MS = config.KANBAN_ARCHIVE_AFTER_DAYS * 86400
 
 function updateFolders(folders) {
   const transaction = db.transaction(() => {

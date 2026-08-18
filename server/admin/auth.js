@@ -1,14 +1,16 @@
 // ─── ADMIN: базовая защита паролем ─────────────────────────
-// Пароль задаётся через .env.server → ADMIN_PASSWORD. Без него /admin
+// Пароль задаётся через .env → ADMIN_PASSWORD. Без него /admin
 // недоступна вообще — это лучше, чем случайно оставить панель открытой
 // всем в локальной сети.
+const config = require('../config')
+
 function requireAdminAuth(req, res, next) {
-  const pass = process.env.ADMIN_PASSWORD
+  const pass = config.ADMIN_PASSWORD
   if (!pass) {
     return res.status(503).send(`
       <body style="font-family:system-ui;background:#0f0f0f;color:#ccc;padding:40px">
         <h2 style="color:#fff">Админка не настроена</h2>
-        <p>Добавь <code>ADMIN_PASSWORD=твой_пароль</code> в файл .env.server в корне проекта и перезапусти сервер.</p>
+        <p>Добавь <code>ADMIN_PASSWORD=твой_пароль</code> в файл .env в корне проекта и перезапусти сервер.</p>
       </body>`)
   }
   const header = req.headers.authorization || ''

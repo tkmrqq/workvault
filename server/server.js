@@ -7,9 +7,7 @@ const path = require('path')
 const fs = require('fs')
 const ogs = require('open-graph-scraper')
 
-// .env.server раньше лежал в проекте, но нигде не подключался — переменные вроде
-// ADMIN_PASSWORD из него никогда реально не читались. Подключаем явно.
-require('dotenv').config({ path: path.join(__dirname, '../.env.server') })
+const config = require('./config')
 
 const db = require('./db')
 
@@ -23,7 +21,7 @@ app.use(cors())
 app.use(express.json())
 
 // ─── UPLOADS ─────────────────────────────────────────────
-const UPLOADS_DIR = path.join(__dirname, '../data/uploads')
+const UPLOADS_DIR = config.UPLOADS_DIR
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true })
 
 const storage = multer.diskStorage({
@@ -39,7 +37,7 @@ const ALLOWED_EXT  = /\.(jpg|jpeg|png|gif|webp|mp4|webm|mov|mkv|pdf|zip|txt|doc|
 
 const upload = multer({
   storage,
-  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB — для видео
+  limits: { fileSize: config.MAX_FILE_BYTES }, // из MAX_FILE_MB в .env, по умолчанию 100MB
   fileFilter: (req, file, cb) => {
     // Запрет папок — браузер шлёт папки как пустые файлы с mime = ''
     // или webkitRelativePath содержит /
@@ -456,5 +454,4 @@ if (fs.existsSync(DIST_DIR)) {
   console.warn('⚠️  dist/ not found — frontend not served')
 }
 
-const PORT = process.env.PORT || 3000
-server.listen(PORT, () => console.log(`WorkVault server → http://localhost:${PORT}`))
+server.listen(config.PORT, config.HOST, () => console.log(`WorkVault server → ${config.APP_URL}`))

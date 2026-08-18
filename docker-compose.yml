@@ -9,6 +9,8 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
+    env_file:
+      - .env
     # Healthcheck — docker будет знать что контейнер реально живой
     healthcheck:
       test: ["CMD", "node", "-e", 

@@ -5,7 +5,8 @@ const db = require('../db')
 const { requireAdminAuth } = require('./auth')
 const { renderAdminPage } = require('./view')
 
-const UPLOADS_DIR = path.join(__dirname, '../../data/uploads')
+const config = require('../config')
+const UPLOADS_DIR = config.UPLOADS_DIR
 
 // Экспортируем фабрику, а не готовый роутер — админке нужен io,
 // чтобы разослать клиентам обновление после удаления рабочей зоны.
