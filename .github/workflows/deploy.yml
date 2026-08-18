@@ -78,12 +78,13 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          APP_URL: ${{ secrets.APP_PUBLIC_URL }}
         run: |
           ssh -o BatchMode=yes "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "cat > /root/workvault/.env" << EOF
           PORT=3000
           HOST=0.0.0.0
-          APP_URL=http://${DEPLOY_HOST}:3000
+          APP_URL=http://${APP_PUBLIC_URL}
           UPLOADS_DIR=./data/uploads
           MAX_FILE_MB=100
           ADMIN_PASSWORD=${ADMIN_PASSWORD}
