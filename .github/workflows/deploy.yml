@@ -78,7 +78,7 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
-          APP_URL: ${{ secrets.APP_PUBLIC_URL }}
+          APP_PUBLIC_URL: ${{ secrets.APP_PUBLIC_URL }}
         run: |
           ssh -o BatchMode=yes "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "cat > /root/workvault/.env" << EOF
