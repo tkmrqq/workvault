@@ -30,7 +30,7 @@
               </div>
               <div class="card-info-actions">
                 <button v-if="!card.archived_at" class="btn-edit-card btn-archive-card" @click="archive"><Archive :size="13" :stroke-width="2" /> В архив</button>
-                <button class="btn-edit-card" @click="editMode = !editMode">
+                <button class="btn-edit-card" @click="toggleEdit">
                   <template v-if="editMode">Отмена</template>
                   <template v-else><Pencil :size="12" :stroke-width="2" /> Редактировать</template>
                 </button>
@@ -189,15 +189,15 @@
 
     <!-- Subtask modal -->
     <Teleport to="body">
-      <div v-if="subModal.open" class="modal-overlay" @click.self="subModal.open = false">
+      <div v-if="subModal.open" class="modal-overlay" @click.self="closeSubModal">
         <div class="modal">
           <div class="modal-header">
             <h2>{{ subModal.mode === 'create' ? 'Новая подзадача' : 'Редактировать подзадачу' }}</h2>
-            <button class="modal-close" @click="subModal.open = false"><X :size="14" :stroke-width="2.5" /></button>
+            <button class="modal-close" @click="closeSubModal"><X :size="14" :stroke-width="2.5" /></button>
           </div>
           <div class="modal-body">
             <label class="field-label">Название *</label>
-            <input v-model="subModal.title" class="field-input" placeholder="Что нужно сделать?" autofocus @keydown.enter="saveSubtask" @keydown.esc="subModal.open = false" />
+            <input v-model="subModal.title" class="field-input" placeholder="Что нужно сделать?" autofocus @keydown.enter="saveSubtask" @keydown.esc="closeSubModal" />
 
             <label class="field-label">Описание</label>
             <textarea v-model="subModal.description" class="field-textarea" placeholder="Подробности..." rows="3" />
@@ -223,7 +223,7 @@
           <div class="modal-footer">
             <button v-if="subModal.mode === 'edit'" class="btn-delete-card" @click="deleteSubtask">Удалить</button>
             <div class="modal-footer-right">
-              <button class="btn-cancel" @click="subModal.open = false">Отмена</button>
+              <button class="btn-cancel" @click="closeSubModal">Отмена</button>
               <button class="btn-save" :disabled="!subModal.title.trim()" @click="saveSubtask">
                 {{ subModal.mode === 'create' ? 'Создать' : 'Сохранить' }}
               </button>
@@ -237,7 +237,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import TitleBar from '@/components/TitleBar.vue'
 import Sidebar  from '@/components/Sidebar.vue'
@@ -324,13 +324,13 @@ function onSubColDragOver(e, col) {
     const rect = cardEls[i].getBoundingClientRect()
     if (e.clientY < rect.top + rect.height / 2) {
       index = i
-      y = rect.top - containerRect.top - 4
+      y = rect.top - containerRect.top + container.scrollTop - 4
       break
     }
   }
   if (y === null) {
     y = cardEls.length
-      ? cardEls[cardEls.length - 1].getBoundingClientRect().bottom - containerRect.top + 4
+      ? cardEls[cardEls.length - 1].getBoundingClientRect().bottom - containerRect.top + container.scrollTop + 4
       : 8
   }
   subDragOverCol.status = col.status
@@ -392,6 +392,37 @@ function startEdit() {
   edit.column_id   = card.value.column_id
   edit.due_date    = tsToDate(card.value.due_date)
 }
+
+// Несохранённые изменения — сравниваем форму с последними сохранёнными данными карточки
+const isDirty = computed(() => {
+  if (!editMode.value || !card.value) return false
+  return edit.title !== card.value.title
+    || edit.description !== (card.value.description || '')
+    || edit.priority !== card.value.priority
+    || edit.assignee_id !== card.value.assignee_id
+    || edit.column_id !== card.value.column_id
+    || edit.due_date !== tsToDate(card.value.due_date)
+})
+
+function toggleEdit() {
+  if (editMode.value && isDirty.value) {
+    if (!confirm('Есть несохранённые данные. Закрыть без сохранения?')) return
+    startEdit() // возвращаем форму к последним сохранённым значениям
+  }
+  editMode.value = !editMode.value
+}
+
+function handleBeforeUnload(e) {
+  if (!isDirty.value) return
+  e.preventDefault()
+  e.returnValue = ''
+}
+window.addEventListener('beforeunload', handleBeforeUnload)
+
+onBeforeRouteLeave(() => {
+  if (!isDirty.value) return true
+  return confirm('Есть несохранённые данные. Уйти со страницы без сохранения?')
+})
 async function saveCard() {
   const r = await apiFetch(`${API}/api/kanban/cards/${card.value.id}`, {
     method: 'PATCH',
@@ -424,16 +455,27 @@ const subModal = reactive({
   open: false, mode: 'create', id: null,
   title: '', description: '', priority: 'medium', assignee_id: null
 })
+let subModalSnapshot = null
 
 function openAddSubtask() {
   subModal.open = true; subModal.mode = 'create'
   subModal.id = null; subModal.title = ''; subModal.description = ''
   subModal.priority = 'medium'; subModal.assignee_id = null
+  subModalSnapshot = { title: '', description: '' }
 }
 function openEditSubtask(sub) {
   subModal.open = true; subModal.mode = 'edit'
   subModal.id = sub.id; subModal.title = sub.title; subModal.description = sub.description || ''
   subModal.priority = sub.priority; subModal.assignee_id = sub.assignee_id
+  subModalSnapshot = { title: subModal.title, description: subModal.description }
+}
+function closeSubModal() {
+  const dirty = subModalSnapshot && (
+    subModal.title !== subModalSnapshot.title ||
+    subModal.description !== subModalSnapshot.description
+  )
+  if (dirty && !confirm('Есть несохранённые данные. Закрыть без сохранения?')) return
+  subModal.open = false
 }
 async function saveSubtask() {
   if (!subModal.title.trim()) return
@@ -455,7 +497,7 @@ async function saveSubtask() {
         body: JSON.stringify(body)
       })
   if (!r) return // модалка остаётся открытой, ничего не потеряно
-  subModal.open = false
+  subModal.open = false // напрямую — уже сохранено, спрашивать не о чем
   await loadCard()
 }
 async function deleteSubtask() {
@@ -504,7 +546,10 @@ onMounted(async () => {
     offSocket = () => socket.off('kanban:card:update')
   }
 })
-onUnmounted(() => offSocket?.())
+onUnmounted(() => {
+  offSocket?.()
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+})
 </script>
 
 <style scoped>

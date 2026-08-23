@@ -12,6 +12,12 @@
             <h1 class="kanban-title">Канбан</h1>
           </div>
           <div class="kanban-header-right">
+            <select v-model="sortBy" class="sort-select" title="Сортировка карточек">
+              <option value="manual">Ручной порядок</option>
+              <option value="date">По дате</option>
+              <option value="title">По названию</option>
+              <option value="priority">По приоритету</option>
+            </select>
             <button class="btn-archive" @click="openArchive"><Archive :size="14" :stroke-width="2" /> Архив</button>
             <button class="btn-add-card" @click="openCreate(null)">
               <Plus :size="15" :stroke-width="2.5" /> Новая задача
@@ -56,9 +62,9 @@
             <div class="col-cards">
               <div v-if="dragOverInfo.colId === col.id" class="drop-line" :style="{ top: dragOverInfo.y + 'px' }"></div>
               <div
-                v-for="card in col.cards" :key="card.id"
+                v-for="card in sortedCards(col.cards)" :key="card.id"
                 class="kanban-card"
-                draggable="true"
+                :draggable="sortBy === 'manual'"
                 @dragstart="onDragStart($event, card)"
                 @dragend="onDragEnd"
                 :class="{ dragging: draggingCard?.id === card.id }"
@@ -225,6 +231,22 @@ const board  = ref([])
 const users  = ref([])
 const workspaces = ref([])
 const activeWorkspaceId = ref(null)
+const sortBy = ref('manual') // 'manual' | 'date' | 'title' | 'priority'
+const PRIORITY_RANK = { high: 0, medium: 1, low: 2 }
+
+function sortedCards(cards) {
+  if (sortBy.value === 'manual') return cards
+  const arr = [...cards]
+  if (sortBy.value === 'date') {
+    // без даты — в конец, а не в начало (Infinity вместо 0)
+    arr.sort((a, b) => (a.due_date ?? Infinity) - (b.due_date ?? Infinity))
+  } else if (sortBy.value === 'title') {
+    arr.sort((a, b) => a.title.localeCompare(b.title, 'ru'))
+  } else if (sortBy.value === 'priority') {
+    arr.sort((a, b) => (PRIORITY_RANK[a.priority] ?? 99) - (PRIORITY_RANK[b.priority] ?? 99))
+  }
+  return arr
+}
 
 // ─── Drag & Drop ─────────────────────────────────────────
 const draggingCard = ref(null)
@@ -247,7 +269,7 @@ function onDragEnd() {
 // сбрасывая позицию на "конец колонки" — из-за этого сортировка внутри одной
 // колонки постоянно сбивалась. Теперь просто меряем позиции карточек напрямую.
 function onColDragOver(e, col) {
-  if (!draggingCard.value) return
+  if (!draggingCard.value || sortBy.value !== 'manual') return
   const container = e.currentTarget.querySelector('.col-cards')
   const containerRect = container.getBoundingClientRect()
   const cardEls = [...container.querySelectorAll('.kanban-card:not(.dragging)')]
@@ -257,13 +279,17 @@ function onColDragOver(e, col) {
     const rect = cardEls[i].getBoundingClientRect()
     if (e.clientY < rect.top + rect.height / 2) {
       index = i
-      y = rect.top - containerRect.top - 4
+      // + container.scrollTop: getBoundingClientRect() даёт координаты относительно
+      // окна, а .drop-line — абсолютно спозиционированный ребёнок скроллящегося
+      // .col-cards, поэтому его top должен быть в системе координат прокрученного
+      // контента, а не видимой области. Без этого линия "уезжала" при скролле колонки.
+      y = rect.top - containerRect.top + container.scrollTop - 4
       break
     }
   }
   if (y === null) {
     y = cardEls.length
-      ? cardEls[cardEls.length - 1].getBoundingClientRect().bottom - containerRect.top + 4
+      ? cardEls[cardEls.length - 1].getBoundingClientRect().bottom - containerRect.top + container.scrollTop + 4
       : 8
   }
   dragOverInfo.colId = col.id
@@ -319,7 +345,12 @@ function openCreate(colId) {
 function openEdit(card) {
   router.push(`/kanban/${card.id}`)
 }
-function closeModal() { modal.open = false }
+function closeModal() {
+  if (modal.title.trim() || modal.description.trim()) {
+    if (!confirm('Есть несохранённые данные. Закрыть без сохранения?')) return
+  }
+  modal.open = false
+}
 
 function dateToTs(dateStr) {
   if (!dateStr) return null
@@ -352,7 +383,7 @@ async function saveCard() {
         body: JSON.stringify(body)
       })
     }
-    closeModal()
+    modal.open = false // напрямую, не через closeModal() — данные уже сохранены, спрашивать не о чем
     await loadBoard()
   } finally {
     modal.submitting = false
@@ -362,7 +393,7 @@ async function saveCard() {
 async function deleteCard() {
   if (!confirm('Удалить задачу?')) return
   await fetch(`${API}/api/kanban/cards/${modal.id}`, { method: 'DELETE' })
-  closeModal()
+  modal.open = false // напрямую — удаление уже подтверждено выше
   await loadBoard()
 }
 
@@ -522,6 +553,13 @@ onUnmounted(() => { offKanban?.(); offWs?.() })
   transition: background var(--transition);
 }
 .btn-add-card:hover { background: var(--accent-hover); }
+.sort-select {
+  padding: 7px 10px; border-radius: var(--radius-md);
+  font-size: var(--text-sm); font-weight: 600;
+  background: var(--surface-3); color: var(--text-muted);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
 .btn-archive {
   display: flex; align-items: center; gap: 6px;
   padding: 7px 14px; border-radius: var(--radius-md);
