@@ -8,6 +8,7 @@
         <!-- Header -->
         <div class="kanban-header">
           <div class="kanban-header-left">
+            <MobileMenuButton />
             <LayoutDashboard class="kanban-icon" :size="20" :stroke-width="2" />
             <h1 class="kanban-title">Канбан</h1>
           </div>
@@ -19,8 +20,9 @@
               <option value="priority">По приоритету</option>
             </select>
             <button class="btn-archive" @click="openArchive"><Archive :size="14" :stroke-width="2" /> Архив</button>
-            <button class="btn-add-card" @click="openCreate(null)">
-              <Plus :size="15" :stroke-width="2.5" /> Новая задача
+            <button class="btn-add-card" @click="openCreate(null)" title="Новая задача">
+              <Plus :size="15" :stroke-width="2.5" />
+              <span class="btn-add-label">Новая задача</span>
             </button>
           </div>
         </div>
@@ -216,8 +218,10 @@
 import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
+import { confirmDialog } from '@/composables/useConfirm'
 import TitleBar from '@/components/TitleBar.vue'
 import Sidebar  from '@/components/Sidebar.vue'
+import MobileMenuButton from '@/components/MobileMenuButton.vue'
 import {
   Archive, Plus, X, Check, Calendar, RotateCcw,
   LayoutDashboard, ArrowDown, ArrowRight, ArrowUp
@@ -345,9 +349,9 @@ function openCreate(colId) {
 function openEdit(card) {
   router.push(`/kanban/${card.id}`)
 }
-function closeModal() {
+async function closeModal() {
   if (modal.title.trim() || modal.description.trim()) {
-    if (!confirm('Есть несохранённые данные. Закрыть без сохранения?')) return
+    if (!await confirmDialog('Есть несохранённые данные. Закрыть без сохранения?')) return
   }
   modal.open = false
 }
@@ -391,7 +395,7 @@ async function saveCard() {
 }
 
 async function deleteCard() {
-  if (!confirm('Удалить задачу?')) return
+  if (!await confirmDialog('Удалить задачу?', { danger: true, confirmLabel: 'Удалить' })) return
   await fetch(`${API}/api/kanban/cards/${modal.id}`, { method: 'DELETE' })
   modal.open = false // напрямую — удаление уже подтверждено выше
   await loadBoard()
@@ -464,7 +468,7 @@ async function renameWorkspace(ws) {
   await loadWorkspaces()
 }
 async function removeWorkspace(ws) {
-  if (!confirm(`Удалить зону «${ws.name}» вместе со всеми её колонками и задачами?`)) return
+  if (!await confirmDialog(`Удалить зону «${ws.name}» вместе со всеми её колонками и задачами?`, { danger: true, confirmLabel: 'Удалить' })) return
   const r = await fetch(`${API}/api/kanban/workspaces/${ws.id}`, { method: 'DELETE' })
   const d = await r.json()
   if (!d.ok) { alert(d.error || 'Не удалось удалить'); return }
@@ -529,12 +533,26 @@ onUnmounted(() => { offKanban?.(); offWs?.() })
   flex: 1; min-height: 0; overflow: hidden;
 }
 .kanban-main {
+  position: relative;
   display: flex; flex-direction: column;
   overflow: hidden; background: var(--bg);
+}
+.kanban-main::before {
+  content: '';
+  position: absolute;
+  top: -120px; right: -120px;
+  width: 420px; height: 420px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: .12;
+  filter: blur(90px);
+  pointer-events: none;
+  z-index: 0;
 }
 
 /* ── Header ── */
 .kanban-header {
+  position: relative; z-index: 1;
   display: flex; align-items: center; justify-content: space-between;
   padding: 14px 20px 12px;
   border-bottom: 1px solid var(--border);
@@ -553,6 +571,7 @@ onUnmounted(() => { offKanban?.(); offWs?.() })
   transition: background var(--transition);
 }
 .btn-add-card:hover { background: var(--accent-hover); }
+.btn-add-label { white-space: nowrap; }
 .sort-select {
   padding: 7px 10px; border-radius: var(--radius-md);
   font-size: var(--text-sm); font-weight: 600;
@@ -595,13 +614,14 @@ onUnmounted(() => { offKanban?.(); offWs?.() })
 
 /* ── Board ── */
 .kanban-board {
+  position: relative; z-index: 1;
   display: flex; gap: 16px;
   padding: 20px;
   overflow-x: auto; overflow-y: hidden;
-  flex: 1; align-items: flex-start;
+  flex: 1; min-height: 0;
+  align-items: stretch;
 }
-.kanban-board::-webkit-scrollbar { height: 6px; }
-.kanban-board::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.kanban-board::-webkit-scrollbar { height: 6px; } /* горизонтальный скролл толще — легче ухватить */
 
 /* ── Column ── */
 .kanban-col {
@@ -610,7 +630,7 @@ onUnmounted(() => { offKanban?.(); offWs?.() })
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   display: flex; flex-direction: column;
-  max-height: calc(100vh - 180px);
+  max-height: 100%;
   transition: border-color .15s;
 }
 .kanban-col.drag-over {
@@ -650,8 +670,6 @@ onUnmounted(() => { offKanban?.(); offWs?.() })
   padding: 4px 10px 12px;
   overflow-y: auto; flex: 1;
 }
-.col-cards::-webkit-scrollbar { width: 4px; }
-.col-cards::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
 /* ── Card ── */
 .kanban-card {
@@ -660,12 +678,17 @@ onUnmounted(() => { offKanban?.(); offWs?.() })
   border-radius: var(--radius-md);
   padding: 10px 12px;
   cursor: grab;
-  transition: box-shadow .15s, opacity .15s, transform .15s;
+  transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease;
   user-select: none;
+  will-change: transform;
 }
-.kanban-card:hover { box-shadow: var(--shadow-md); border-color: var(--accent-line); }
-.kanban-card:active { cursor: grabbing; }
-.kanban-card.dragging { opacity: .4; transform: scale(.97); }
+.kanban-card:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--accent-line);
+  transform: translateY(-2px);
+}
+.kanban-card:active { cursor: grabbing; transform: translateY(0) scale(.99); }
+.kanban-card.dragging { opacity: .4; transform: scale(.97); transition: none; }
 
 .card-top-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 6px; }
 .card-priority {
@@ -857,4 +880,55 @@ onUnmounted(() => { offKanban?.(); offWs?.() })
   transition: all var(--transition);
 }
 .btn-restore:hover { background: var(--accent); color: #fff; }
+
+@media (max-width: 860px) {
+  .kanban-layout { grid-template-columns: 1fr; }
+
+  .kanban-header {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 10px 12px;
+  }
+  .kanban-header-right {
+    flex: 1 1 100%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: nowrap;
+  }
+  .sort-select,
+  .btn-archive,
+  .btn-add-card {
+    height: 36px;
+    box-sizing: border-box;
+  }
+  .sort-select { flex: 1; min-width: 0; padding: 0 10px; }
+  .btn-archive { flex-shrink: 0; padding: 0 12px; }
+  .btn-add-card {
+    flex-shrink: 0;
+    width: 36px;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+  }
+  .btn-add-label { display: none; }
+
+  .ws-tabs { padding: 10px 12px; gap: 8px; }
+  .ws-tab {
+    padding: 10px 16px;
+    font-size: var(--text-sm);
+  }
+  .ws-tab-add { padding: 10px 14px; }
+
+  .kanban-board { padding: 12px; gap: 12px; }
+  .kanban-col {
+    width: min(280px, calc(100vw - 48px));
+    min-width: min(280px, calc(100vw - 48px));
+  }
+
+  .col-terminal-badge { display: none; }
+  .field-row { grid-template-columns: 1fr; }
+  .modal-footer { flex-direction: column; align-items: stretch; gap: 10px; }
+  .modal-footer-right { justify-content: flex-end; }
+}
 </style>

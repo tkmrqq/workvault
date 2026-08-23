@@ -7,6 +7,7 @@
 
         <!-- Breadcrumb -->
         <div class="breadcrumb">
+          <MobileMenuButton />
           <button class="breadcrumb-back" @click="router.push('/kanban')">
             <ArrowLeft :size="14" :stroke-width="2.2" /> Канбан
           </button>
@@ -239,8 +240,10 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useAppStore } from '@/stores/app'
+import { confirmDialog } from '@/composables/useConfirm'
 import TitleBar from '@/components/TitleBar.vue'
 import Sidebar  from '@/components/Sidebar.vue'
+import MobileMenuButton from '@/components/MobileMenuButton.vue'
 import {
   ArrowLeft, Archive, RotateCcw, Pencil, X, Plus,
   ArrowDown, ArrowRight as ArrowRightIcon, ArrowUp as ArrowUpIcon
@@ -404,9 +407,9 @@ const isDirty = computed(() => {
     || edit.due_date !== tsToDate(card.value.due_date)
 })
 
-function toggleEdit() {
+async function toggleEdit() {
   if (editMode.value && isDirty.value) {
-    if (!confirm('Есть несохранённые данные. Закрыть без сохранения?')) return
+    if (!await confirmDialog('Есть несохранённые данные. Закрыть без сохранения?')) return
     startEdit() // возвращаем форму к последним сохранённым значениям
   }
   editMode.value = !editMode.value
@@ -419,9 +422,9 @@ function handleBeforeUnload(e) {
 }
 window.addEventListener('beforeunload', handleBeforeUnload)
 
-onBeforeRouteLeave(() => {
+onBeforeRouteLeave(async () => {
   if (!isDirty.value) return true
-  return confirm('Есть несохранённые данные. Уйти со страницы без сохранения?')
+  return await confirmDialog('Есть несохранённые данные. Уйти со страницы без сохранения?')
 })
 async function saveCard() {
   const r = await apiFetch(`${API}/api/kanban/cards/${card.value.id}`, {
@@ -434,7 +437,7 @@ async function saveCard() {
   await loadCard()
 }
 async function deleteCard() {
-  if (!confirm('Удалить задачу и все подзадачи?')) return
+  if (!await confirmDialog('Удалить задачу и все подзадачи?', { danger: true, confirmLabel: 'Удалить' })) return
   const r = await apiFetch(`${API}/api/kanban/cards/${card.value.id}`, { method: 'DELETE' })
   if (!r) return
   router.push('/kanban')
@@ -469,12 +472,12 @@ function openEditSubtask(sub) {
   subModal.priority = sub.priority; subModal.assignee_id = sub.assignee_id
   subModalSnapshot = { title: subModal.title, description: subModal.description }
 }
-function closeSubModal() {
+async function closeSubModal() {
   const dirty = subModalSnapshot && (
     subModal.title !== subModalSnapshot.title ||
     subModal.description !== subModalSnapshot.description
   )
-  if (dirty && !confirm('Есть несохранённые данные. Закрыть без сохранения?')) return
+  if (dirty && !await confirmDialog('Есть несохранённые данные. Закрыть без сохранения?')) return
   subModal.open = false
 }
 async function saveSubtask() {
@@ -598,7 +601,7 @@ onUnmounted(() => {
 
 .card-page-content {
   display: grid; grid-template-columns: 360px 1fr;
-  flex: 1; overflow: hidden;
+  flex: 1; min-height: 0; overflow: hidden;
 }
 .card-info {
   padding: 20px; overflow-y: auto;
@@ -693,7 +696,7 @@ onUnmounted(() => {
 .btn-delete-card:hover { background: rgba(224,108,117,.25); }
 
 /* ── Subtasks board ── */
-.subtasks-area { display: flex; flex-direction: column; overflow: hidden; padding: 20px; gap: 16px; }
+.subtasks-area { display: flex; flex-direction: column; overflow: hidden; padding: 20px; gap: 16px; min-height: 0; }
 .subtasks-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
 .subtasks-title { font-size: var(--text-base); font-weight: 700; }
 .btn-add-subtask {
@@ -705,16 +708,15 @@ onUnmounted(() => {
 }
 .btn-add-subtask:hover { background: var(--accent-hover); }
 
-.subtasks-board { display: flex; gap: 12px; overflow-x: auto; flex: 1; align-items: flex-start; }
-.subtasks-board::-webkit-scrollbar { height: 6px; }
-.subtasks-board::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.subtasks-board { display: flex; gap: 12px; overflow-x: auto; flex: 1; min-height: 0; align-items: stretch; }
+.subtasks-board::-webkit-scrollbar { height: 6px; } /* горизонтальный скролл толще — легче ухватить */
 
 .sub-col {
   flex: 1; min-width: 200px;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   display: flex; flex-direction: column;
-  max-height: calc(100vh - 200px);
+  max-height: 100%;
   transition: border-color .15s;
 }
 .sub-col.drag-over { border-color: var(--accent); background: var(--accent-soft); }
@@ -734,8 +736,6 @@ onUnmounted(() => {
   display: flex; flex-direction: column; gap: 6px;
   padding: 4px 8px 10px; overflow-y: auto; flex: 1;
 }
-.sub-col-cards::-webkit-scrollbar { width: 3px; }
-.sub-col-cards::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
 .drop-line {
   position: absolute; left: 8px; right: 8px;
@@ -769,11 +769,13 @@ onUnmounted(() => {
 .sub-card {
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: var(--radius-md); padding: 8px 10px;
-  cursor: grab; transition: box-shadow .15s, opacity .15s;
+  cursor: grab; transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease;
   user-select: none;
+  will-change: transform;
 }
-.sub-card:hover { box-shadow: var(--shadow-md); border-color: var(--accent-line); }
-.sub-card.dragging { opacity: .4; }
+.sub-card:hover { box-shadow: var(--shadow-md); border-color: var(--accent-line); transform: translateY(-2px); }
+.sub-card:active { cursor: grabbing; transform: translateY(0) scale(.99); }
+.sub-card.dragging { opacity: .4; transition: none; }
 .sub-card-priority {
   font-size: 9px; font-weight: 700; padding: 1px 6px;
   border-radius: 20px; display: inline-flex; align-items: center; gap: 3px; margin-bottom: 4px;
@@ -823,4 +825,58 @@ onUnmounted(() => {
   padding: 12px 20px 16px; border-top: 1px solid var(--border);
 }
 .modal-footer-right { display: flex; gap: 8px; }
+
+@media (max-width: 860px) {
+  .card-page-layout { grid-template-columns: 1fr; }
+
+  .breadcrumb {
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    gap: 6px;
+  }
+  .breadcrumb-current {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+
+  .card-page-content {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .card-info {
+    flex-shrink: 0;
+    max-height: 42dvh;
+    overflow-y: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .card-info-header { flex-wrap: wrap; }
+  .card-info-actions { flex-wrap: wrap; }
+
+  .subtasks-area {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding: 16px 12px;
+  }
+  .subtasks-board {
+    flex: 1;
+    min-height: 0;
+    align-items: stretch;
+    padding-bottom: 4px;
+  }
+  .sub-col {
+    flex: 0 0 auto;
+    width: min(260px, calc(100vw - 40px));
+    min-width: min(260px, calc(100vw - 40px));
+    max-height: 100%;
+  }
+
+  .edit-row { grid-template-columns: 1fr; }
+  .modal-footer { flex-direction: column; align-items: stretch; gap: 10px; }
+  .modal-footer-right { justify-content: flex-end; }
+}
 </style>

@@ -4,13 +4,12 @@
   "description": "workvault",
   "main": "electron/main.js",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host",
     "build": "vite build",
-    "build:electron-renderer": "cross-env BUILD_TARGET=electron vite build",
     "build:electron": "cross-env BUILD_TARGET=electron vite build && electron-builder --publish never",
     "preview": "vite preview",
     "electron": "electron .",
-    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:dev": "concurrently \"vite --host\" \"wait-on http://localhost:5173 && electron .\"",
     "server": "node server/server.js",
     "start": "concurrently \"npm run server\" \"npm run electron:dev\"",
     "deploy": "cross-env BUILD_TARGET=electron vite build && electron-builder --publish always"

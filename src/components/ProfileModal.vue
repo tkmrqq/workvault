@@ -132,6 +132,7 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
+import { confirmDialog } from '@/composables/useConfirm'
 import {
   X, Calendar, Palette, Smile, Paintbrush,
   Pencil, MessageCircle, RefreshCw, LogOut, Check
@@ -209,8 +210,8 @@ function switchAccount() {
   router.push('/')
 }
 
-function logout() {
-  if (!confirm('Выйти из аккаунта?')) return
+async function logout() {
+  if (!await confirmDialog('Выйти из аккаунта?')) return
   store.logout()
   emit('close')
   router.push('/')
