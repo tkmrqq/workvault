@@ -19,6 +19,9 @@
               <option value="title">По названию</option>
               <option value="priority">По приоритету</option>
             </select>
+            <button class="btn-list-count" @click="openListModal" title="Экспорт / импорт списком">
+              <ListChecks :size="14" :stroke-width="2" /> {{ totalCardsCount }}
+            </button>
             <button class="btn-archive" @click="openArchive"><Archive :size="14" :stroke-width="2" /> Архив</button>
             <button class="btn-add-card" @click="openCreate(null)" title="Новая задача">
               <Plus :size="15" :stroke-width="2.5" />
@@ -62,7 +65,8 @@
 
             <!-- Cards -->
             <div class="col-cards">
-              <div v-if="dragOverInfo.colId === col.id" class="drop-line" :style="{ top: dragOverInfo.y + 'px' }"></div>
+              <div v-if="dragOverInfo.colId === col.id && col.cards.length" class="drop-line" :style="{ top: dragOverInfo.y + 'px' }"></div>
+              <div v-if="!col.cards.length" class="col-empty-drop" :class="{ 'drag-over': dragOverInfo.colId === col.id }">Перетащите сюда</div>
               <div
                 v-for="card in sortedCards(col.cards)" :key="card.id"
                 class="kanban-card"
@@ -72,6 +76,9 @@
                 :class="{ dragging: draggingCard?.id === card.id }"
                 @click="openEdit(card)"
               >
+                  <div v-if="sortBy === 'manual'" class="card-drag-handle" @mousedown="dragHandleGrabbed = true" title="Потяни, чтобы переместить">
+                    <GripVertical :size="13" :stroke-width="2" />
+                  </div>
                   <div class="card-top-row">
                     <div class="card-priority" :class="card.priority">
                       <component :is="priorityIcon(card.priority)" :size="10" :stroke-width="3" />{{ priorityLabel(card.priority) }}
@@ -211,11 +218,56 @@
         </div>
       </div>
     </Teleport>
+
+    <!-- Modal: List export/import -->
+    <Teleport to="body">
+      <div v-if="listModal.open" class="modal-overlay" @click.self="listModal.open = false">
+        <div class="modal list-modal">
+          <div class="modal-header">
+            <h2 class="modal-title-row"><ListChecks :size="17" :stroke-width="2" /> Список задач</h2>
+            <button class="modal-close" @click="listModal.open = false"><X :size="14" :stroke-width="2.5" /></button>
+          </div>
+          <div class="modal-body list-modal-body">
+            <div class="list-section">
+              <div class="list-section-header">
+                <span class="field-label">Экспорт — все карточки текущей зоны</span>
+                <div class="list-section-actions">
+                  <button class="btn-cancel btn-sm" @click="copyExportText"><Copy :size="12" :stroke-width="2.2" /> Копировать</button>
+                  <button class="btn-cancel btn-sm" @click="downloadExportText"><Download :size="12" :stroke-width="2.2" /> .txt</button>
+                </div>
+              </div>
+              <textarea ref="exportTextarea" class="field-textarea list-textarea" readonly :value="exportText" rows="8" @click="$event.target.select()"></textarea>
+            </div>
+
+            <div class="list-section">
+              <label class="field-label">Импорт — вставь список, каждая задача с новой строки (можно с «- » в начале)</label>
+              <textarea
+                v-model="importText"
+                class="field-textarea list-textarea"
+                rows="8"
+                placeholder="- Первая задача&#10;- Вторая задача&#10;- Третья задача"
+              ></textarea>
+              <div class="import-controls">
+                <select v-model="importColumnId" class="field-select">
+                  <option :value="null" disabled>— Выбери колонку —</option>
+                  <option v-for="col in board" :key="col.id" :value="col.id">{{ col.title }}</option>
+                </select>
+                <button
+                  class="btn-save"
+                  :disabled="!importLines.length || !importColumnId || importing"
+                  @click="runImport"
+                >{{ importing ? 'Добавляю...' : `Добавить ${importLines.length || ''} карточек` }}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { confirmDialog } from '@/composables/useConfirm'
@@ -224,7 +276,8 @@ import Sidebar  from '@/components/Sidebar.vue'
 import MobileMenuButton from '@/components/MobileMenuButton.vue'
 import {
   Archive, Plus, X, Check, Calendar, RotateCcw,
-  LayoutDashboard, ArrowDown, ArrowRight, ArrowUp
+  LayoutDashboard, ArrowDown, ArrowRight, ArrowUp,
+  ListChecks, Copy, Download, GripVertical
 } from 'lucide-vue-next'
 
 const store  = useAppStore()
@@ -256,7 +309,10 @@ function sortedCards(cards) {
 const draggingCard = ref(null)
 const dragOverInfo  = reactive({ colId: null, index: null, y: 0 })
 
+const dragHandleGrabbed = ref(false)
+
 function onDragStart(e, card) {
+  if (!dragHandleGrabbed.value) { e.preventDefault(); return }
   draggingCard.value = card
   e.dataTransfer.effectAllowed = 'move'
   // Firefox не начнёт drag без setData — Chrome/Electron обычно и без этого работают,
@@ -267,6 +323,7 @@ function onDragEnd() {
   draggingCard.value = null
   dragOverInfo.colId = null
   dragOverInfo.index = null
+  dragHandleGrabbed.value = false
 }
 // Единый обработчик на колонку. Раньше был ещё отдельный на каждую карточку,
 // но плейсхолдер-вставка сам оказывался под курсором и перехватывал dragover,
@@ -432,6 +489,79 @@ async function restoreCard(card) {
   await Promise.all([loadArchive(), loadBoard()])
 }
 
+// ─── List export/import ─────────────────────────────────────
+const listModal = reactive({ open: false })
+const importText = ref('')
+const importColumnId = ref(null)
+const importing = ref(false)
+
+const totalCardsCount = computed(() => board.value.reduce((sum, col) => sum + col.cards.length, 0))
+
+const exportText = computed(() => {
+  return board.value
+    .map(col => {
+      if (!col.cards.length) return null
+      const lines = col.cards.map(c => `- ${c.title}`).join('\n')
+      return `## ${col.title}\n${lines}`
+    })
+    .filter(Boolean)
+    .join('\n\n')
+})
+
+// Строки для импорта: убираем маркер списка (-, *, •) и пропускаем markdown-заголовки
+// (## Колонка) — так экспортированный текст можно вставить обратно без мусорных карточек.
+const importLines = computed(() => {
+  return importText.value
+    .split('\n')
+    .map(l => l.replace(/^[\s]*[-*•]\s*/, '').trim())
+    .filter(l => l && !l.startsWith('#'))
+})
+
+function openListModal() {
+  listModal.open = true
+  importText.value = ''
+  importColumnId.value = board.value[0]?.id ?? null
+}
+const exportTextarea = ref(null)
+
+async function copyExportText() {
+  try {
+    await navigator.clipboard.writeText(exportText.value)
+  } catch (e) {
+    // Clipboard API недоступен (старый браузер/небезопасный контекст) — просто
+    // выделяем текст в поле, дальше пользователь скопирует сам через Ctrl+C
+    exportTextarea.value?.select()
+  }
+}
+function downloadExportText() {
+  const blob = new Blob([exportText.value], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = 'workvault-tasks.txt'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+async function runImport() {
+  if (!importLines.value.length || !importColumnId.value) return
+  importing.value = true
+  try {
+    // Последовательно, не Promise.all — так сохраняется порядок вставки
+    // (позиция карточки на сервере считается по количеству уже существующих).
+    for (const title of importLines.value) {
+      await fetch(`${API}/api/kanban/cards`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ column_id: importColumnId.value, title, workspace_id: activeWorkspaceId.value })
+      })
+    }
+    importText.value = ''
+    listModal.open = false
+    await loadBoard()
+  } finally {
+    importing.value = false
+  }
+}
+
 // ─── Workspaces ───────────────────────────────────────────
 async function loadWorkspaces() {
   const r = await fetch(`${API}/api/kanban/workspaces`)
@@ -498,6 +628,7 @@ function isOverdue(card) {
 
 // ─── Socket realtime ──────────────────────────────────────
 let offKanban, offWs
+function resetDragHandle() { dragHandleGrabbed.value = false }
 onMounted(async () => {
   if (!store.user) { router.push('/'); return }
   if (!store.folders.length) await store.fetchFolders()
@@ -505,6 +636,10 @@ onMounted(async () => {
   await loadBoard()
   const r = await fetch(`${API}/api/users`)
   users.value = await r.json()
+
+  // Клик по ручке без реального перетаскивания не порождает dragend —
+  // без этого следующий обычный клик по телу карточки ошибочно считался бы разрешённым
+  window.addEventListener('mouseup', resetDragHandle)
 
   const socket = store.getSocket()
   if (socket) {
@@ -519,7 +654,7 @@ onMounted(async () => {
     offWs = () => socket.off('kanban:workspaces:update')
   }
 })
-onUnmounted(() => { offKanban?.(); offWs?.() })
+onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseup', resetDragHandle) })
 </script>
 
 <style scoped>
@@ -588,6 +723,16 @@ onUnmounted(() => { offKanban?.(); offWs?.() })
   transition: all var(--transition);
 }
 .btn-archive:hover { background: var(--hover); color: var(--text); }
+
+.btn-list-count {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 12px; border-radius: var(--radius-md);
+  font-size: var(--text-sm); font-weight: 700;
+  background: var(--surface-3); color: var(--text-muted);
+  border: 1px solid var(--border);
+  transition: all var(--transition);
+}
+.btn-list-count:hover { background: var(--hover); color: var(--text); }
 
 /* ── Workspace tabs ── */
 .ws-tabs {
@@ -673,11 +818,12 @@ onUnmounted(() => { offKanban?.(); offWs?.() })
 
 /* ── Card ── */
 .kanban-card {
+  position: relative;
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 10px 12px;
-  cursor: grab;
+  padding: 10px 30px 10px 12px;
+  cursor: pointer;
   transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease;
   user-select: none;
   will-change: transform;
@@ -687,8 +833,21 @@ onUnmounted(() => { offKanban?.(); offWs?.() })
   border-color: var(--accent-line);
   transform: translateY(-2px);
 }
-.kanban-card:active { cursor: grabbing; transform: translateY(0) scale(.99); }
+.kanban-card:active { transform: translateY(0) scale(.99); }
 .kanban-card.dragging { opacity: .4; transform: scale(.97); transition: none; }
+
+.card-drag-handle {
+  position: absolute; top: 8px; right: 8px;
+  width: 18px; height: 18px; display: flex; align-items: center; justify-content: center;
+  color: var(--text-faint); cursor: grab;
+  opacity: 0; transition: opacity var(--transition), color var(--transition);
+}
+.kanban-card:hover .card-drag-handle { opacity: 1; }
+.card-drag-handle:hover { color: var(--accent); }
+.card-drag-handle:active { cursor: grabbing; }
+@media (hover: none) {
+  .card-drag-handle { opacity: 1; } /* тач-устройства: hover ненадёжен, держим ручку видимой всегда */
+}
 
 .card-top-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 6px; }
 .card-priority {
@@ -745,10 +904,22 @@ onUnmounted(() => { offKanban?.(); offWs?.() })
   z-index: 5;
   transition: top .08s ease;
 }
-.drop-line::before {
-  content: ''; position: absolute; left: -4px; top: -3px;
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--accent);
+
+.col-empty-drop {
+  margin: 4px 2px;
+  padding: 22px 8px;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius-md);
+  text-align: center;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  transition: all var(--transition);
+}
+.col-empty-drop.drag-over {
+  border-color: var(--accent);
+  border-style: solid;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 /* ── Empty ── */
@@ -777,6 +948,15 @@ onUnmounted(() => { offKanban?.(); offWs?.() })
   animation: modalIn .2s ease forwards;
 }
 .archive-modal { width: min(520px, 100%); max-height: 80vh; }
+.list-modal { width: min(620px, 100%); max-height: 86vh; }
+.list-modal-body { max-height: 74vh; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
+.list-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.list-section-actions { display: flex; gap: 6px; }
+.btn-sm { padding: 5px 10px; font-size: var(--text-xs); display: flex; align-items: center; gap: 5px; }
+.list-textarea { width: 100%; font-family: var(--font-mono, monospace); font-size: var(--text-xs); resize: vertical; }
+.import-controls { display: flex; gap: 8px; margin-top: 10px; }
+.import-controls .field-select { flex: 1; }
+
 @keyframes modalIn {
   to { opacity: 1; transform: scale(1) translateY(0); }
 }
@@ -795,29 +975,6 @@ onUnmounted(() => { offKanban?.(); offWs?.() })
 }
 .modal-close:hover { background: var(--hover); color: var(--text); }
 .modal-body { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
-.field-label { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; display: block; }
-.field-input, .field-select {
-  width: 100%;
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 9px 12px;
-  font-size: var(--text-sm);
-  color: var(--text);
-  transition: border-color var(--transition);
-}
-.field-input:focus, .field-select:focus { outline: none; border-color: var(--accent-line); }
-.field-textarea {
-  width: 100%; resize: vertical; min-height: 72px;
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 9px 12px;
-  font-size: var(--text-sm); font-family: inherit;
-  color: var(--text);
-  transition: border-color var(--transition);
-}
-.field-textarea:focus { outline: none; border-color: var(--accent-line); }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .field-group { display: flex; flex-direction: column; }
 .modal-footer {

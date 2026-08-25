@@ -30,7 +30,7 @@
                 <component :is="priorityIcon(card.priority)" :size="11" :stroke-width="3" />{{ priorityLabel(card.priority) }}
               </div>
               <div class="card-info-actions">
-                <button v-if="!card.archived_at" class="btn-edit-card btn-archive-card" @click="archive"><Archive :size="13" :stroke-width="2" /> В архив</button>
+                <button v-if="!card.archived_at" class="btn-edit-card btn-archive-card btn-icon-only" @click="archive" title="В архив"><Archive :size="13" :stroke-width="2" /></button>
                 <button class="btn-edit-card" @click="toggleEdit">
                   <template v-if="editMode">Отмена</template>
                   <template v-else><Pencil :size="12" :stroke-width="2" /> Редактировать</template>
@@ -41,14 +41,14 @@
             <!-- View mode -->
             <template v-if="!editMode">
               <h1 class="card-page-title">{{ card.title }}</h1>
-              <p v-if="card.description" class="card-page-desc">{{ card.description }}</p>
+              <div v-if="card.description" class="card-page-desc markdown-body" v-html="renderMarkdown(card.description)"></div>
               <p v-else class="card-page-desc empty">Нет описания</p>
             </template>
 
             <!-- Edit mode -->
             <template v-else>
               <input v-model="edit.title" class="field-input" placeholder="Название" />
-              <textarea v-model="edit.description" class="field-textarea" placeholder="Описание..." rows="4" />
+              <MarkdownEditor v-model="edit.description" placeholder="Описание..." :rows="4" />
               <div class="edit-row">
                 <div class="edit-group">
                   <label class="field-label">Приоритет</label>
@@ -130,6 +130,18 @@
               <button class="btn-add-subtask" @click="openAddSubtask"><Plus :size="13" :stroke-width="2.5" /> Добавить</button>
             </div>
 
+            <div v-if="filterableTags.length" class="tags-filter-row">
+              <Tag :size="12" :stroke-width="2" class="tags-filter-icon" />
+              <button
+                v-for="tag in filterableTags" :key="tag.id"
+                class="tag-chip filter-chip-tag"
+                :class="{ active: activeTagFilters.includes(tag.id) }"
+                :style="activeTagFilters.includes(tag.id) ? { background: tag.color, color: '#fff' } : { background: tag.color + '22', color: tag.color }"
+                @click="toggleTagFilter(tag.id)"
+              >{{ tag.name }}</button>
+              <button v-if="activeTagFilters.length" class="tags-filter-clear" @click="activeTagFilters = []">Сбросить</button>
+            </div>
+
             <div class="subtasks-board">
               <div
                 v-for="col in subtaskCols"
@@ -151,12 +163,15 @@
                     v-for="sub in col.items"
                     :key="sub.id"
                     class="sub-card"
-                    draggable="true"
+                    :draggable="!activeTagFilters.length"
                     @dragstart="onSubDragStart($event, sub)"
                     @dragend="onSubDragEnd"
                     :class="{ dragging: subDragging?.id === sub.id }"
                     @click="openEditSubtask(sub)"
                   >
+                    <div v-if="!activeTagFilters.length" class="sub-card-drag-handle" @mousedown="subDragHandleGrabbed = true" title="Потяни, чтобы переместить">
+                      <GripVertical :size="11" :stroke-width="2" />
+                    </div>
                     <div class="sub-card-priority" :class="sub.priority">
                       <component :is="priorityIcon(sub.priority)" :size="9" :stroke-width="3" />{{ priorityLabel(sub.priority) }}
                     </div>
@@ -204,7 +219,7 @@
             <input v-model="subModal.title" class="field-input" placeholder="Что нужно сделать?" autofocus @keydown.enter="saveSubtask" @keydown.esc="closeSubModal" />
 
             <label class="field-label">Описание</label>
-            <textarea v-model="subModal.description" class="field-textarea" placeholder="Подробности..." rows="3" />
+            <MarkdownEditor v-model="subModal.description" placeholder="Подробности..." :rows="3" />
 
             <div class="edit-row">
               <div class="edit-group">
@@ -277,9 +292,11 @@ import { confirmDialog } from '@/composables/useConfirm'
 import TitleBar from '@/components/TitleBar.vue'
 import Sidebar  from '@/components/Sidebar.vue'
 import MobileMenuButton from '@/components/MobileMenuButton.vue'
+import MarkdownEditor from '@/components/MarkdownEditor.vue'
+import { renderMarkdown } from '@/composables/useMarkdown'
 import {
   ArrowLeft, Archive, RotateCcw, Pencil, X, Plus,
-  ArrowDown, ArrowRight as ArrowRightIcon, ArrowUp as ArrowUpIcon
+  ArrowDown, ArrowRight as ArrowRightIcon, ArrowUp as ArrowUpIcon, Tag, GripVertical
 } from 'lucide-vue-next'
 
 const store  = useAppStore()
@@ -322,9 +339,23 @@ const STATUSES = [
   { status: 'done',        label: 'Done',         color: '#4caf7d' },
 ]
 
+const activeTagFilters = ref([])
+const filterableTags = computed(() => {
+  const map = new Map()
+  ;(card.value?.subtasks || []).forEach(s => (s.tags || []).forEach(t => map.set(t.id, t)))
+  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+})
+function toggleTagFilter(tagId) {
+  const i = activeTagFilters.value.indexOf(tagId)
+  if (i === -1) activeTagFilters.value.push(tagId)
+  else activeTagFilters.value.splice(i, 1)
+}
+
 const subtaskCols = computed(() => STATUSES.map(s => ({
   ...s,
-  items: (card.value?.subtasks || []).filter(t => t.status === s.status)
+  items: (card.value?.subtasks || [])
+    .filter(t => t.status === s.status)
+    .filter(t => !activeTagFilters.value.length || (t.tags || []).some(tag => activeTagFilters.value.includes(tag.id)))
 })))
 
 const doneCount   = computed(() => (card.value?.subtasks || []).filter(s => s.status === 'done').length)
@@ -341,16 +372,20 @@ const isOverdue = computed(() => card.value?.due_date && card.value.due_date * 1
 const subDragging    = ref(null)
 const subDragOverCol = reactive({ status: null, index: null, y: 0 })
 
+const subDragHandleGrabbed = ref(false)
+
 function onSubDragStart(e, sub) {
+  if (!subDragHandleGrabbed.value) { e.preventDefault(); return }
   subDragging.value = sub
   e.dataTransfer.effectAllowed = 'move'
 }
 function onSubDragEnd() {
   subDragging.value = null
   subDragOverCol.status = null
+  subDragHandleGrabbed.value = false
 }
 function onSubColDragOver(e, col) {
-  if (!subDragging.value) return
+  if (!subDragging.value || activeTagFilters.value.length) return
   const container = e.currentTarget.querySelector('.sub-col-cards')
   const containerRect = container.getBoundingClientRect()
   const cardEls = [...container.querySelectorAll('.sub-card:not(.dragging)')]
@@ -537,8 +572,7 @@ async function addSubtaskTag(name) {
   })
   if (!r) return
   subModal.tags = await r.json()
-  tagInput.value = ''
-  showTagSuggestions.value = false
+  tagInput.value = '' // tagSuggestions сам опустеет на пустом запросе — дропдаун скроется естественно
   const known = allTags.value.some(t => t.name.toLowerCase() === name.trim().toLowerCase())
   if (!known) allTags.value = await (await apiFetch(`${API}/api/kanban/tags`))?.json() || allTags.value
 }
@@ -603,6 +637,7 @@ function formatDate(ts) {
 }
 
 let offSocket
+function resetSubDragHandle() { subDragHandleGrabbed.value = false }
 onMounted(async () => {
   if (!store.user) { router.push('/'); return }
   if (!store.folders.length) await store.fetchFolders()
@@ -616,6 +651,7 @@ onMounted(async () => {
   if (ur) users.value   = await ur.json()
   if (br) columns.value = await br.json()
   if (tr) allTags.value = await tr.json()
+  window.addEventListener('mouseup', resetSubDragHandle)
   const socket = store.getSocket()
   if (socket) {
     socket.on('kanban:card:update', (cardId) => {
@@ -629,6 +665,7 @@ onMounted(async () => {
 onUnmounted(() => {
   offSocket?.()
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  window.removeEventListener('mouseup', resetSubDragHandle)
 })
 </script>
 
@@ -704,27 +741,13 @@ onUnmounted(() => {
 }
 .btn-edit-card:hover { border-color: var(--accent-line); color: var(--accent); }
 .btn-archive-card:hover { border-color: #e8af34; color: #e8af34; }
+.btn-icon-only { padding: 5px; }
 
 .card-page-title { font-size: var(--text-xl); font-weight: 700; line-height: 1.3; }
 .card-page-desc { font-size: var(--text-sm); color: var(--text-muted); line-height: 1.6; white-space: pre-wrap; }
 .card-page-desc.empty { color: var(--text-faint); font-style: italic; }
 
 /* Edit form */
-.field-label { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; display: block; }
-.field-input, .field-select {
-  width: 100%; background: var(--surface-3); border: 1px solid var(--border);
-  border-radius: var(--radius-md); padding: 8px 12px; font-size: var(--text-sm);
-  color: var(--text); transition: border-color var(--transition);
-}
-.field-input:focus, .field-select:focus { outline: none; border-color: var(--accent-line); }
-.field-textarea {
-  width: 100%; resize: vertical; min-height: 80px;
-  background: var(--surface-3); border: 1px solid var(--border);
-  border-radius: var(--radius-md); padding: 8px 12px;
-  font-size: var(--text-sm); font-family: inherit; color: var(--text);
-  transition: border-color var(--transition);
-}
-.field-textarea:focus { outline: none; border-color: var(--accent-line); }
 .edit-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .edit-group { display: flex; flex-direction: column; gap: 4px; }
 .edit-actions { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -844,15 +867,28 @@ onUnmounted(() => {
 .toast-fade-enter-from, .toast-fade-leave-to { opacity: 0; transform: translateX(-50%) translateY(6px); }
 
 .sub-card {
+  position: relative;
   background: var(--surface-2); border: 1px solid var(--border);
-  border-radius: var(--radius-md); padding: 8px 10px;
-  cursor: grab; transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease;
+  border-radius: var(--radius-md); padding: 8px 10px 8px 22px;
+  cursor: pointer; transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease;
   user-select: none;
   will-change: transform;
 }
 .sub-card:hover { box-shadow: var(--shadow-md); border-color: var(--accent-line); transform: translateY(-2px); }
-.sub-card:active { cursor: grabbing; transform: translateY(0) scale(.99); }
+.sub-card:active { transform: translateY(0) scale(.99); }
 .sub-card.dragging { opacity: .4; transition: none; }
+.sub-card-drag-handle {
+  position: absolute; left: 3px; top: 0; bottom: 0;
+  width: 15px; display: flex; align-items: center; justify-content: center;
+  color: var(--text-faint); cursor: grab;
+  opacity: 0; transition: opacity var(--transition), color var(--transition);
+}
+.sub-card:hover .sub-card-drag-handle { opacity: 1; }
+.sub-card-drag-handle:hover { color: var(--accent); }
+.sub-card-drag-handle:active { cursor: grabbing; }
+@media (hover: none) {
+  .sub-card-drag-handle { opacity: 1; }
+}
 .sub-card-priority {
   font-size: 9px; font-weight: 700; padding: 1px 6px;
   border-radius: 20px; display: inline-flex; align-items: center; gap: 3px; margin-bottom: 4px;
@@ -871,6 +907,23 @@ onUnmounted(() => {
   width: 18px; height: 18px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center; font-size: .7rem; flex-shrink: 0;
 }
+
+/* Tag filter row */
+.tags-filter-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  padding: 0 0 10px;
+}
+.tags-filter-icon { color: var(--text-faint); flex-shrink: 0; }
+.filter-chip-tag {
+  cursor: pointer; border: 1px solid transparent;
+  transition: all var(--transition);
+}
+.filter-chip-tag.active { border-color: rgba(255,255,255,.3); }
+.tags-filter-clear {
+  font-size: var(--text-xs); color: var(--text-faint); font-weight: 600;
+  padding: 2px 6px; transition: color var(--transition);
+}
+.tags-filter-clear:hover { color: var(--text); }
 
 /* Tags */
 .sub-card-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 6px; }
