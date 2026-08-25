@@ -162,6 +162,9 @@
                     </div>
                     <div class="sub-card-title">{{ sub.title }}</div>
                     <div v-if="sub.description" class="sub-card-desc">{{ sub.description }}</div>
+                    <div v-if="sub.tags?.length" class="sub-card-tags">
+                      <span v-for="tag in sub.tags" :key="tag.id" class="tag-chip" :style="{ background: tag.color + '22', color: tag.color }">{{ tag.name }}</span>
+                    </div>
                     <div v-if="sub.assignee_name" class="sub-card-assignee">
                       <span class="assignee-avatar-sm"
                         :style="{ background: sub.assignee_color + '22', color: sub.assignee_color }">
@@ -220,6 +223,36 @@
                 </select>
               </div>
             </div>
+
+            <label class="field-label">Теги</label>
+            <div v-if="subModal.mode === 'create'" class="tags-hint">Теги можно добавить после создания подзадачи</div>
+            <template v-else>
+              <div class="tags-current">
+                <span v-for="tag in subModal.tags" :key="tag.id" class="tag-chip removable" :style="{ background: tag.color + '22', color: tag.color }">
+                  {{ tag.name }}
+                  <button class="tag-remove" @click="removeSubtaskTag(tag)"><X :size="10" :stroke-width="3" /></button>
+                </span>
+                <span v-if="!subModal.tags.length" class="tags-empty">Пока нет тегов</span>
+              </div>
+              <div class="tags-input-row">
+                <input
+                  v-model="tagInput"
+                  class="field-input tags-input"
+                  placeholder="Название тега + Enter"
+                  maxlength="30"
+                  @keydown.enter.prevent="submitTagInput"
+                  @focus="showTagSuggestions = true"
+                  @blur="onTagInputBlur"
+                />
+                <div v-if="showTagSuggestions && tagSuggestions.length" class="tags-suggestions">
+                  <button
+                    v-for="tag in tagSuggestions" :key="tag.id"
+                    class="tag-suggestion"
+                    @mousedown.prevent="addSubtaskTag(tag.name)"
+                  ><span class="tag-suggestion-dot" :style="{ background: tag.color }"></span>{{ tag.name }}</button>
+                </div>
+              </div>
+            </template>
           </div>
           <div class="modal-footer">
             <button v-if="subModal.mode === 'edit'" class="btn-delete-card" @click="deleteSubtask">Удалить</button>
@@ -456,21 +489,63 @@ async function unarchive() {
 // ─── Subtask modal ────────────────────────────────────────
 const subModal = reactive({
   open: false, mode: 'create', id: null,
-  title: '', description: '', priority: 'medium', assignee_id: null
+  title: '', description: '', priority: 'medium', assignee_id: null, tags: []
 })
 let subModalSnapshot = null
+
+// Все теги, когда-либо созданные в проекте — для автокомплита при вводе.
+const allTags = ref([])
+const tagInput = ref('')
+const showTagSuggestions = ref(false)
+const tagSuggestions = computed(() => {
+  const q = tagInput.value.trim().toLowerCase()
+  if (!q) return []
+  const existingNames = new Set(subModal.tags.map(t => t.name.toLowerCase()))
+  return allTags.value
+    .filter(t => t.name.toLowerCase().includes(q) && !existingNames.has(t.name.toLowerCase()))
+    .slice(0, 6)
+})
 
 function openAddSubtask() {
   subModal.open = true; subModal.mode = 'create'
   subModal.id = null; subModal.title = ''; subModal.description = ''
-  subModal.priority = 'medium'; subModal.assignee_id = null
+  subModal.priority = 'medium'; subModal.assignee_id = null; subModal.tags = []
   subModalSnapshot = { title: '', description: '' }
 }
 function openEditSubtask(sub) {
   subModal.open = true; subModal.mode = 'edit'
   subModal.id = sub.id; subModal.title = sub.title; subModal.description = sub.description || ''
   subModal.priority = sub.priority; subModal.assignee_id = sub.assignee_id
+  subModal.tags = sub.tags ? [...sub.tags] : []
   subModalSnapshot = { title: subModal.title, description: subModal.description }
+}
+function onTagInputBlur() {
+  // небольшая задержка, чтобы успел сработать @mousedown на подсказке —
+  // иначе blur закрывает список раньше клика по нему
+  setTimeout(() => { showTagSuggestions.value = false }, 150)
+}
+async function submitTagInput() {
+  const name = tagInput.value.trim()
+  if (!name) return
+  await addSubtaskTag(name)
+}
+async function addSubtaskTag(name) {
+  const r = await apiFetch(`${API}/api/kanban/subtasks/${subModal.id}/tags`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name })
+  })
+  if (!r) return
+  subModal.tags = await r.json()
+  tagInput.value = ''
+  showTagSuggestions.value = false
+  const known = allTags.value.some(t => t.name.toLowerCase() === name.trim().toLowerCase())
+  if (!known) allTags.value = await (await apiFetch(`${API}/api/kanban/tags`))?.json() || allTags.value
+}
+async function removeSubtaskTag(tag) {
+  const r = await apiFetch(`${API}/api/kanban/subtasks/${subModal.id}/tags/${tag.id}`, { method: 'DELETE' })
+  if (!r) return
+  subModal.tags = await r.json()
 }
 async function closeSubModal() {
   const dirty = subModalSnapshot && (
@@ -533,12 +608,14 @@ onMounted(async () => {
   if (!store.folders.length) await store.fetchFolders()
   await loadCard()
   if (card.value) startEdit()
-  const [ur, br] = await Promise.all([
+  const [ur, br, tr] = await Promise.all([
     apiFetch(`${API}/api/users`),
-    apiFetch(`${API}/api/kanban`)
+    apiFetch(`${API}/api/kanban`),
+    apiFetch(`${API}/api/kanban/tags`)
   ])
   if (ur) users.value   = await ur.json()
   if (br) columns.value = await br.json()
+  if (tr) allTags.value = await tr.json()
   const socket = store.getSocket()
   if (socket) {
     socket.on('kanban:card:update', (cardId) => {
@@ -794,6 +871,38 @@ onUnmounted(() => {
   width: 18px; height: 18px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center; font-size: .7rem; flex-shrink: 0;
 }
+
+/* Tags */
+.sub-card-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 6px; }
+.tag-chip {
+  font-size: 10px; font-weight: 600; padding: 2px 8px;
+  border-radius: var(--radius-full); white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.tag-chip.removable { padding-right: 4px; }
+.tag-remove {
+  display: flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; border-radius: 50%;
+  opacity: .7; transition: opacity var(--transition), background var(--transition);
+}
+.tag-remove:hover { opacity: 1; background: rgba(0,0,0,.12); }
+.tags-hint { font-size: var(--text-xs); color: var(--text-faint); padding: 4px 0 8px; }
+.tags-current { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; min-height: 22px; }
+.tags-empty { font-size: var(--text-xs); color: var(--text-faint); }
+.tags-input-row { position: relative; }
+.tags-input { width: 100%; }
+.tags-suggestions {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md); z-index: 10; overflow: hidden;
+}
+.tag-suggestion {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 10px; font-size: var(--text-xs); color: var(--text);
+  transition: background var(--transition);
+}
+.tag-suggestion:hover { background: var(--hover); }
+.tag-suggestion-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
 /* Modal */
 .modal-overlay {
