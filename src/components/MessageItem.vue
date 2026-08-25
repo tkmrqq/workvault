@@ -2,7 +2,7 @@
   <div class="msg-wrap" :class="{ own: isOwn }">
     <div class="msg-avatar"
       :style="{ background: msg.user_color + '22', color: msg.user_color }"
-      @click="viewingUser = { id: msg.user_id, name: msg.user_name, avatar: msg.user_avatar, color: msg.user_color }"
+      @click="openProfile(msg.user_id)"
       style="cursor: pointer"
       :title="msg.user_name"
     >
@@ -110,6 +110,20 @@ import {
 } from 'lucide-vue-next'
 
 const viewingUser = ref(null)
+
+// Данные автора в самом сообщении — снапшот на момент отправки (имя/аватар/цвет
+// могли с тех пор поменяться в профиле). При открытии всегда подтягиваем
+// актуальную запись; если юзер удалён или запрос не прошёл — падаем обратно
+// на то, что есть в сообщении, чтобы модалка не осталась пустой.
+async function openProfile(userId) {
+  viewingUser.value = { id: props.msg.user_id, name: props.msg.user_name, avatar: props.msg.user_avatar, color: props.msg.user_color }
+  try {
+    const r = await fetch(`${API}/api/users/${userId}`)
+    if (r.ok) viewingUser.value = await r.json()
+  } catch (e) {
+    // офлайн/ошибка сети — остаёмся на снапшоте из сообщения
+  }
+}
 
 const props = defineProps({ msg: Object })
 const emit  = defineEmits(['open-image'])

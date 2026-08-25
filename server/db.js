@@ -105,6 +105,18 @@ db.exec(`
     details    TEXT,
     created_at INTEGER DEFAULT (unixepoch())
   );
+
+  CREATE TABLE IF NOT EXISTS kanban_tags (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    name  TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    color TEXT NOT NULL DEFAULT '#8a8fa3'
+  );
+
+  CREATE TABLE IF NOT EXISTS kanban_subtask_tags (
+    subtask_id INTEGER NOT NULL REFERENCES kanban_subtasks(id) ON DELETE CASCADE,
+    tag_id     INTEGER NOT NULL REFERENCES kanban_tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (subtask_id, tag_id)
+  );
 `)
 
 try {
@@ -196,6 +208,24 @@ if (seedKanban.c === 0) {
 }
 
 const ARCHIVE_AFTER_MS = config.KANBAN_ARCHIVE_AFTER_DAYS * 86400
+
+// Та же палитра, что и для автоцвета юзеров при регистрации (LoginView.vue) —
+// чтобы теги визуально не выбивались из остального UI.
+const TAG_PALETTE = ['#7c6af7','#4caf7d','#e8956d','#e06c75','#e8af34','#61afef','#c678dd','#56b6c2']
+
+function hashString(str) {
+  let h = 0
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0
+  return h
+}
+
+function tagsForSubtask(subtask_id) {
+  return db.prepare(`
+    SELECT t.* FROM kanban_tags t
+    JOIN kanban_subtask_tags st ON st.tag_id = t.id
+    WHERE st.subtask_id = ? ORDER BY t.name COLLATE NOCASE
+  `).all(subtask_id)
+}
 
 function updateFolders(folders) {
   const transaction = db.transaction(() => {
@@ -484,6 +514,7 @@ module.exports = {
         FROM kanban_subtasks s LEFT JOIN users u ON s.assignee_id = u.id
         WHERE s.card_id = ? ORDER BY s.position
       `).all(id)
+      card.subtasks.forEach(s => { s.tags = tagsForSubtask(s.id) })
       return card
     },
     createSubtask: (card_id, title, assignee_id, priority, description) => {
@@ -492,10 +523,12 @@ module.exports = {
         INSERT INTO kanban_subtasks (card_id, title, description, assignee_id, priority, position)
         VALUES (?,?,?,?,?,?)
       `).run(card_id, title, description || null, assignee_id || null, priority || 'medium', pos)
-      return db.prepare(`
+      const s = db.prepare(`
         SELECT s.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
         FROM kanban_subtasks s LEFT JOIN users u ON s.assignee_id = u.id WHERE s.id=?
       `).get(r.lastInsertRowid)
+      s.tags = []
+      return s
     },
     updateSubtask: (id, { title, status, assignee_id, priority, description }) => {
       db.prepare(`
@@ -507,10 +540,32 @@ module.exports = {
           priority    = COALESCE(?, priority)
         WHERE id = ?
       `).run(title || null, description || null, status || null, assignee_id ?? null, priority || null, id)
-      return db.prepare(`
+      const s = db.prepare(`
         SELECT s.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
         FROM kanban_subtasks s LEFT JOIN users u ON s.assignee_id = u.id WHERE s.id=?
       `).get(id)
+      s.tags = tagsForSubtask(id)
+      return s
+    },
+    getAllTags: () => db.prepare('SELECT * FROM kanban_tags ORDER BY name COLLATE NOCASE').all(),
+    getSubtaskCardId: (id) => db.prepare('SELECT card_id FROM kanban_subtasks WHERE id=?').get(id)?.card_id,
+    addTagToSubtask: (subtask_id, name) => {
+      const clean = (name || '').trim()
+      if (!clean) return tagsForSubtask(subtask_id)
+      let tag = db.prepare('SELECT * FROM kanban_tags WHERE name = ? COLLATE NOCASE').get(clean)
+      if (!tag) {
+        // Детерминированный цвет по имени — одинаковый тег всегда одного цвета,
+        // и не нужно спрашивать у пользователя цвет при создании на лету.
+        const color = TAG_PALETTE[hashString(clean.toLowerCase()) % TAG_PALETTE.length]
+        const r = db.prepare('INSERT INTO kanban_tags (name, color) VALUES (?,?)').run(clean, color)
+        tag = { id: r.lastInsertRowid, name: clean, color }
+      }
+      db.prepare('INSERT OR IGNORE INTO kanban_subtask_tags (subtask_id, tag_id) VALUES (?,?)').run(subtask_id, tag.id)
+      return tagsForSubtask(subtask_id)
+    },
+    removeTagFromSubtask: (subtask_id, tag_id) => {
+      db.prepare('DELETE FROM kanban_subtask_tags WHERE subtask_id=? AND tag_id=?').run(subtask_id, tag_id)
+      return tagsForSubtask(subtask_id)
     },
     reorderSubtasks: (subtasks) => {
       const stmt = db.prepare('UPDATE kanban_subtasks SET status=?, position=? WHERE id=?')

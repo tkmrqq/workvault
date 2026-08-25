@@ -5,86 +5,106 @@
   --font-body: 'Satoshi', 'Inter', sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 
-  --text-xs:   clamp(0.6875rem, 0.65rem + 0.2vw, 0.75rem);
-  --text-sm:   clamp(0.8125rem, 0.78rem + 0.2vw, 0.875rem);
-  --text-base: clamp(0.9375rem, 0.9rem  + 0.2vw, 1rem);
-  --text-lg:   clamp(1.0625rem, 1rem    + 0.3vw, 1.25rem);
-  --text-xl:   clamp(1.25rem,   1.1rem  + 0.6vw, 1.75rem);
+  --text-xs: clamp(0.6875rem, 0.65rem + 0.2vw, 0.75rem);
+  --text-sm: clamp(0.8125rem, 0.78rem + 0.2vw, 0.875rem);
+  --text-base: clamp(0.9375rem, 0.9rem + 0.2vw, 1rem);
+  --text-lg: clamp(1.0625rem, 1rem + 0.3vw, 1.25rem);
+  --text-xl: clamp(1.25rem, 1.1rem + 0.6vw, 1.75rem);
 
-  --space-1:  0.25rem;  --space-2:  0.5rem;   --space-3:  0.75rem;
-  --space-4:  1rem;     --space-5:  1.25rem;  --space-6:  1.5rem;
-  --space-8:  2rem;     --space-10: 2.5rem;   --space-12: 3rem;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
 
-  --radius-sm: 0.25rem; --radius-md: 0.5rem;
-  --radius-lg: 0.75rem; --radius-xl: 1rem;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
   --radius-full: 9999px;
 
   --transition: 140ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* ── DARK (default) ──────────────────── */
-:root, [data-theme="dark"] {
-  --bg:            #0d0d0d;
-  --surface:       #111111;
-  --surface-2:     #161616;
-  --surface-3:     #1c1c1c;
-  --hover:         #222222;
-  --divider:       #272727;
-  --border:        #2e2e2e;
+:root,
+[data-theme="dark"] {
+  --bg: #0d0d0d;
+  --surface: #111111;
+  --surface-2: #161616;
+  --surface-3: #1c1c1c;
+  --hover: #222222;
+  --divider: #272727;
+  --border: #2e2e2e;
 
-  --text:          #ddddd8;
-  --text-muted:    #888884;
-  --text-faint:    #505050;
-  --text-inverse:  #111111;
+  --text: #ddddd8;
+  --text-muted: #888884;
+  --text-faint: #505050;
+  --text-inverse: #111111;
 
-  --accent:        #7c6af7;
-  --accent-hover:  #9a8bf9;
-  --accent-soft:   rgba(124,106,247,.13);
-  --accent-line:   rgba(124,106,247,.35);
+  --accent: #7c6af7;
+  --accent-hover: #9a8bf9;
+  --accent-soft: rgba(124, 106, 247, .13);
+  --accent-line: rgba(124, 106, 247, .35);
 
-  --green:  #4caf7d;
+  --green: #4caf7d;
   --orange: #e8956d;
-  --red:    #e06c75;
-  --gold:   #e8af34;
+  --red: #e06c75;
+  --gold: #e8af34;
 
-  --shadow-sm: 0 1px 4px rgba(0,0,0,.45);
-  --shadow-md: 0 4px 18px rgba(0,0,0,.55);
-  --shadow-lg: 0 12px 40px rgba(0,0,0,.65);
+  --shadow-sm: 0 1px 4px rgba(0, 0, 0, .45);
+  --shadow-md: 0 4px 18px rgba(0, 0, 0, .55);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, .65);
 }
 
 /* ── LIGHT ───────────────────────────── */
 [data-theme="light"] {
-  --bg:            #f4f3ef;
-  --surface:       #fafaf8;
-  --surface-2:     #ffffff;
-  --surface-3:     #eeede9;
-  --hover:         #e8e7e2;
-  --divider:       #e0deda;
-  --border:        #d2d0ca;
+  --bg: #f4f3ef;
+  --surface: #fafaf8;
+  --surface-2: #ffffff;
+  --surface-3: #eeede9;
+  --hover: #e8e7e2;
+  --divider: #e0deda;
+  --border: #d2d0ca;
 
-  --text:          #1a1a18;
-  --text-muted:    #6b6a65;
-  --text-faint:    #b0aea8;
-  --text-inverse:  #fafaf8;
+  --text: #1a1a18;
+  --text-muted: #6b6a65;
+  --text-faint: #b0aea8;
+  --text-inverse: #fafaf8;
 
-  --accent:        #5f4fe6;
-  --accent-hover:  #4b3dd0;
-  --accent-soft:   rgba(95,79,230,.1);
-  --accent-line:   rgba(95,79,230,.3);
+  --accent: #5f4fe6;
+  --accent-hover: #4b3dd0;
+  --accent-soft: rgba(95, 79, 230, .1);
+  --accent-line: rgba(95, 79, 230, .3);
 
-  --green:  #2e8b57;
+  --green: #2e8b57;
   --orange: #c0622a;
-  --red:    #c0393f;
-  --gold:   #c08500;
+  --red: #c0393f;
+  --gold: #c08500;
 
-  --shadow-sm: 0 1px 4px rgba(0,0,0,.07);
-  --shadow-md: 0 4px 18px rgba(0,0,0,.09);
-  --shadow-lg: 0 12px 40px rgba(0,0,0,.12);
+  --shadow-sm: 0 1px 4px rgba(0, 0, 0, .07);
+  --shadow-md: 0 4px 18px rgba(0, 0, 0, .09);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, .12);
 }
 
 /* ── BASE ────────────────────────────── */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { -webkit-font-smoothing: antialiased; scroll-behavior: smooth; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  scroll-behavior: smooth;
+}
+
 body {
   font-family: var(--font-body);
   font-size: var(--text-sm);
@@ -93,23 +113,290 @@ body {
   min-height: 100dvh;
   overflow: hidden;
 }
-button { cursor: pointer; background: none; border: none; font: inherit; color: inherit; }
-input, textarea { font: inherit; color: inherit; }
-img { display: block; max-width: 100%; height: auto; }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
 
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
-::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+button {
+  cursor: pointer;
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+}
 
-@keyframes fadeUp   { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
-@keyframes fadeIn   { from { opacity:0 } to { opacity:1 } }
-@keyframes scaleIn  { from { opacity:0; transform:scale(.94); } to { opacity:1; transform:scale(1); } }
-@keyframes slideIn  { from { opacity:0; transform:translateX(-8px); } to { opacity:1; transform:translateX(0); } }
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+/* Firefox */
+
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0
+  }
+
+  to {
+    opacity: 1
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(.94);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration:.01ms!important; transition-duration:.01ms!important; }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: .01ms !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+/* ── Markdown-рендер (описания карточек/подзадач) ──────────
+   Глобально и НЕ scoped: контент приходит через v-html, а scoped-стили
+   компонентов до него не достают (нет data-v-атрибута на вставленных тегах). */
+.markdown-body {
+  line-height: 1.55;
+  color: var(--text);
+  word-wrap: break-word;
+}
+
+.markdown-body>*:first-child {
+  margin-top: 0;
+}
+
+.markdown-body>*:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  font-weight: 700;
+  line-height: 1.3;
+  margin: 16px 0 8px;
+}
+
+.markdown-body h1 {
+  font-size: 1.3em;
+}
+
+.markdown-body h2 {
+  font-size: 1.15em;
+}
+
+.markdown-body h3 {
+  font-size: 1.05em;
+}
+
+.markdown-body p {
+  margin: 8px 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+
+.markdown-body li {
+  margin: 2px 0;
+}
+
+.markdown-body li input[type="checkbox"] {
+  margin-right: 6px;
+}
+
+.markdown-body a {
+  color: var(--accent);
+}
+
+.markdown-body strong {
+  font-weight: 700;
+}
+
+.markdown-body em {
+  font-style: italic;
+}
+
+.markdown-body blockquote {
+  margin: 8px 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--accent-line);
+  color: var(--text-muted);
+}
+
+.markdown-body code {
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: .9em;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.markdown-body pre {
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 10px 0;
+}
+
+.markdown-body pre code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 14px 0;
+}
+
+.markdown-body table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: .95em;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+}
+
+.markdown-body img {
+  border-radius: var(--radius-sm);
+  margin: 6px 0;
+}
+
+/* ── Общие поля форм (input/select/textarea) ───────────────
+   Раньше были продублированы почти один-в-один в ProfileModal.vue,
+   KanbanView.vue и KanbanCardView.vue — scoped-стили одного компонента не
+   доставали до полей, отрендеренных другим (MarkdownEditor.vue отрисовывал
+   textarea совсем без темизации). Теперь один источник правды. */
+.field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  display: block;
+}
+
+.field-input,
+.field-select,
+.field-textarea {
+  width: 100%;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  font-size: var(--text-sm);
+  font-family: inherit;
+  color: var(--text);
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+.field-input:focus,
+.field-select:focus,
+.field-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.field-input.field-error {
+  border-color: #e06c75;
+}
+
+.field-input.field-error:focus {
+  box-shadow: 0 0 0 3px rgba(224, 108, 117, .15);
+}
+
+.field-textarea {
+  resize: vertical;
+  min-height: 80px;
+  max-height: 60vh;
+  /* тянется вниз, не вправо; не растёт бесконечно */
 }

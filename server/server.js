@@ -323,6 +323,26 @@ app.delete('/api/kanban/subtasks/:id', (req, res) => {
   res.json({ ok: true })
 })
 
+// ─── TAGS (свободные, создаются на лету) ───────────────────
+app.get('/api/kanban/tags', (_, res) => res.json(db.kanban.getAllTags()))
+
+app.post('/api/kanban/subtasks/:id/tags', (req, res) => {
+  const name = (req.body.name || '').trim()
+  if (!name) return res.status(400).json({ error: 'Название тега обязательно' })
+  if (name.length > 30) return res.status(400).json({ error: 'Слишком длинное название тега' })
+  const tags = db.kanban.addTagToSubtask(req.params.id, name)
+  const cardId = db.kanban.getSubtaskCardId(req.params.id)
+  if (cardId) io.emit('kanban:card:update', cardId)
+  res.json(tags)
+})
+
+app.delete('/api/kanban/subtasks/:id/tags/:tagId', (req, res) => {
+  const tags = db.kanban.removeTagFromSubtask(req.params.id, req.params.tagId)
+  const cardId = db.kanban.getSubtaskCardId(req.params.id)
+  if (cardId) io.emit('kanban:card:update', cardId)
+  res.json(tags)
+})
+
 // ─── SOCKET.IO ────────────────────────────────────────────
 const onlineUsers = new Map() // socketId → { userId, userName, channelId }
 

@@ -2,6 +2,7 @@
   <div class="ch-header-wrap">
     <div class="ch-header">
       <div class="ch-info">
+        <MobileMenuButton />
         <span class="ch-icon">{{ store.activeChannel?.icon || '#' }}</span>
         <span class="ch-name">{{ store.activeChannel?.name || 'Выбери канал' }}</span>
       </div>
@@ -28,6 +29,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useAppStore } from '@/stores/app'
+import MobileMenuButton from './MobileMenuButton.vue'
 import { LayoutGrid, Image as ImageIcon, FileText, Link2 } from 'lucide-vue-next'
 
 const store = useAppStore()

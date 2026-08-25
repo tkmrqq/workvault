@@ -59,4 +59,8 @@ onMounted(async () => {
   overflow: hidden;
   background: var(--bg);
 }
+
+@media (max-width: 860px) {
+  .chat-layout { grid-template-columns: 1fr; } /* сайдбар теперь fixed-drawer поверх, колонку под него не резервируем */
+}
 </style>

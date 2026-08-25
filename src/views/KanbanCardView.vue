@@ -7,6 +7,7 @@
 
         <!-- Breadcrumb -->
         <div class="breadcrumb">
+          <MobileMenuButton />
           <button class="breadcrumb-back" @click="router.push('/kanban')">
             <ArrowLeft :size="14" :stroke-width="2.2" /> Канбан
           </button>
@@ -29,8 +30,8 @@
                 <component :is="priorityIcon(card.priority)" :size="11" :stroke-width="3" />{{ priorityLabel(card.priority) }}
               </div>
               <div class="card-info-actions">
-                <button v-if="!card.archived_at" class="btn-edit-card btn-archive-card" @click="archive"><Archive :size="13" :stroke-width="2" /> В архив</button>
-                <button class="btn-edit-card" @click="editMode = !editMode">
+                <button v-if="!card.archived_at" class="btn-edit-card btn-archive-card btn-icon-only" @click="archive" title="В архив"><Archive :size="13" :stroke-width="2" /></button>
+                <button class="btn-edit-card" @click="toggleEdit">
                   <template v-if="editMode">Отмена</template>
                   <template v-else><Pencil :size="12" :stroke-width="2" /> Редактировать</template>
                 </button>
@@ -40,14 +41,14 @@
             <!-- View mode -->
             <template v-if="!editMode">
               <h1 class="card-page-title">{{ card.title }}</h1>
-              <p v-if="card.description" class="card-page-desc">{{ card.description }}</p>
+              <div v-if="card.description" class="card-page-desc markdown-body" v-html="renderMarkdown(card.description)"></div>
               <p v-else class="card-page-desc empty">Нет описания</p>
             </template>
 
             <!-- Edit mode -->
             <template v-else>
               <input v-model="edit.title" class="field-input" placeholder="Название" />
-              <textarea v-model="edit.description" class="field-textarea" placeholder="Описание..." rows="4" />
+              <MarkdownEditor v-model="edit.description" placeholder="Описание..." :rows="4" />
               <div class="edit-row">
                 <div class="edit-group">
                   <label class="field-label">Приоритет</label>
@@ -129,6 +130,18 @@
               <button class="btn-add-subtask" @click="openAddSubtask"><Plus :size="13" :stroke-width="2.5" /> Добавить</button>
             </div>
 
+            <div v-if="filterableTags.length" class="tags-filter-row">
+              <Tag :size="12" :stroke-width="2" class="tags-filter-icon" />
+              <button
+                v-for="tag in filterableTags" :key="tag.id"
+                class="tag-chip filter-chip-tag"
+                :class="{ active: activeTagFilters.includes(tag.id) }"
+                :style="activeTagFilters.includes(tag.id) ? { background: tag.color, color: '#fff' } : { background: tag.color + '22', color: tag.color }"
+                @click="toggleTagFilter(tag.id)"
+              >{{ tag.name }}</button>
+              <button v-if="activeTagFilters.length" class="tags-filter-clear" @click="activeTagFilters = []">Сбросить</button>
+            </div>
+
             <div class="subtasks-board">
               <div
                 v-for="col in subtaskCols"
@@ -150,17 +163,23 @@
                     v-for="sub in col.items"
                     :key="sub.id"
                     class="sub-card"
-                    draggable="true"
+                    :draggable="!activeTagFilters.length"
                     @dragstart="onSubDragStart($event, sub)"
                     @dragend="onSubDragEnd"
                     :class="{ dragging: subDragging?.id === sub.id }"
                     @click="openEditSubtask(sub)"
                   >
+                    <div v-if="!activeTagFilters.length" class="sub-card-drag-handle" @mousedown="subDragHandleGrabbed = true" title="Потяни, чтобы переместить">
+                      <GripVertical :size="11" :stroke-width="2" />
+                    </div>
                     <div class="sub-card-priority" :class="sub.priority">
                       <component :is="priorityIcon(sub.priority)" :size="9" :stroke-width="3" />{{ priorityLabel(sub.priority) }}
                     </div>
                     <div class="sub-card-title">{{ sub.title }}</div>
                     <div v-if="sub.description" class="sub-card-desc">{{ sub.description }}</div>
+                    <div v-if="sub.tags?.length" class="sub-card-tags">
+                      <span v-for="tag in sub.tags" :key="tag.id" class="tag-chip" :style="{ background: tag.color + '22', color: tag.color }">{{ tag.name }}</span>
+                    </div>
                     <div v-if="sub.assignee_name" class="sub-card-assignee">
                       <span class="assignee-avatar-sm"
                         :style="{ background: sub.assignee_color + '22', color: sub.assignee_color }">
@@ -189,18 +208,18 @@
 
     <!-- Subtask modal -->
     <Teleport to="body">
-      <div v-if="subModal.open" class="modal-overlay" @click.self="subModal.open = false">
+      <div v-if="subModal.open" class="modal-overlay" @click.self="closeSubModal">
         <div class="modal">
           <div class="modal-header">
             <h2>{{ subModal.mode === 'create' ? 'Новая подзадача' : 'Редактировать подзадачу' }}</h2>
-            <button class="modal-close" @click="subModal.open = false"><X :size="14" :stroke-width="2.5" /></button>
+            <button class="modal-close" @click="closeSubModal"><X :size="14" :stroke-width="2.5" /></button>
           </div>
           <div class="modal-body">
             <label class="field-label">Название *</label>
-            <input v-model="subModal.title" class="field-input" placeholder="Что нужно сделать?" autofocus @keydown.enter="saveSubtask" @keydown.esc="subModal.open = false" />
+            <input v-model="subModal.title" class="field-input" placeholder="Что нужно сделать?" autofocus @keydown.enter="saveSubtask" @keydown.esc="closeSubModal" />
 
             <label class="field-label">Описание</label>
-            <textarea v-model="subModal.description" class="field-textarea" placeholder="Подробности..." rows="3" />
+            <MarkdownEditor v-model="subModal.description" placeholder="Подробности..." :rows="3" />
 
             <div class="edit-row">
               <div class="edit-group">
@@ -219,11 +238,41 @@
                 </select>
               </div>
             </div>
+
+            <label class="field-label">Теги</label>
+            <div v-if="subModal.mode === 'create'" class="tags-hint">Теги можно добавить после создания подзадачи</div>
+            <template v-else>
+              <div class="tags-current">
+                <span v-for="tag in subModal.tags" :key="tag.id" class="tag-chip removable" :style="{ background: tag.color + '22', color: tag.color }">
+                  {{ tag.name }}
+                  <button class="tag-remove" @click="removeSubtaskTag(tag)"><X :size="10" :stroke-width="3" /></button>
+                </span>
+                <span v-if="!subModal.tags.length" class="tags-empty">Пока нет тегов</span>
+              </div>
+              <div class="tags-input-row">
+                <input
+                  v-model="tagInput"
+                  class="field-input tags-input"
+                  placeholder="Название тега + Enter"
+                  maxlength="30"
+                  @keydown.enter.prevent="submitTagInput"
+                  @focus="showTagSuggestions = true"
+                  @blur="onTagInputBlur"
+                />
+                <div v-if="showTagSuggestions && tagSuggestions.length" class="tags-suggestions">
+                  <button
+                    v-for="tag in tagSuggestions" :key="tag.id"
+                    class="tag-suggestion"
+                    @mousedown.prevent="addSubtaskTag(tag.name)"
+                  ><span class="tag-suggestion-dot" :style="{ background: tag.color }"></span>{{ tag.name }}</button>
+                </div>
+              </div>
+            </template>
           </div>
           <div class="modal-footer">
             <button v-if="subModal.mode === 'edit'" class="btn-delete-card" @click="deleteSubtask">Удалить</button>
             <div class="modal-footer-right">
-              <button class="btn-cancel" @click="subModal.open = false">Отмена</button>
+              <button class="btn-cancel" @click="closeSubModal">Отмена</button>
               <button class="btn-save" :disabled="!subModal.title.trim()" @click="saveSubtask">
                 {{ subModal.mode === 'create' ? 'Создать' : 'Сохранить' }}
               </button>
@@ -237,13 +286,17 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useAppStore } from '@/stores/app'
+import { confirmDialog } from '@/composables/useConfirm'
 import TitleBar from '@/components/TitleBar.vue'
 import Sidebar  from '@/components/Sidebar.vue'
+import MobileMenuButton from '@/components/MobileMenuButton.vue'
+import MarkdownEditor from '@/components/MarkdownEditor.vue'
+import { renderMarkdown } from '@/composables/useMarkdown'
 import {
   ArrowLeft, Archive, RotateCcw, Pencil, X, Plus,
-  ArrowDown, ArrowRight as ArrowRightIcon, ArrowUp as ArrowUpIcon
+  ArrowDown, ArrowRight as ArrowRightIcon, ArrowUp as ArrowUpIcon, Tag, GripVertical
 } from 'lucide-vue-next'
 
 const store  = useAppStore()
@@ -286,9 +339,23 @@ const STATUSES = [
   { status: 'done',        label: 'Done',         color: '#4caf7d' },
 ]
 
+const activeTagFilters = ref([])
+const filterableTags = computed(() => {
+  const map = new Map()
+  ;(card.value?.subtasks || []).forEach(s => (s.tags || []).forEach(t => map.set(t.id, t)))
+  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+})
+function toggleTagFilter(tagId) {
+  const i = activeTagFilters.value.indexOf(tagId)
+  if (i === -1) activeTagFilters.value.push(tagId)
+  else activeTagFilters.value.splice(i, 1)
+}
+
 const subtaskCols = computed(() => STATUSES.map(s => ({
   ...s,
-  items: (card.value?.subtasks || []).filter(t => t.status === s.status)
+  items: (card.value?.subtasks || [])
+    .filter(t => t.status === s.status)
+    .filter(t => !activeTagFilters.value.length || (t.tags || []).some(tag => activeTagFilters.value.includes(tag.id)))
 })))
 
 const doneCount   = computed(() => (card.value?.subtasks || []).filter(s => s.status === 'done').length)
@@ -305,16 +372,20 @@ const isOverdue = computed(() => card.value?.due_date && card.value.due_date * 1
 const subDragging    = ref(null)
 const subDragOverCol = reactive({ status: null, index: null, y: 0 })
 
+const subDragHandleGrabbed = ref(false)
+
 function onSubDragStart(e, sub) {
+  if (!subDragHandleGrabbed.value) { e.preventDefault(); return }
   subDragging.value = sub
   e.dataTransfer.effectAllowed = 'move'
 }
 function onSubDragEnd() {
   subDragging.value = null
   subDragOverCol.status = null
+  subDragHandleGrabbed.value = false
 }
 function onSubColDragOver(e, col) {
-  if (!subDragging.value) return
+  if (!subDragging.value || activeTagFilters.value.length) return
   const container = e.currentTarget.querySelector('.sub-col-cards')
   const containerRect = container.getBoundingClientRect()
   const cardEls = [...container.querySelectorAll('.sub-card:not(.dragging)')]
@@ -324,13 +395,13 @@ function onSubColDragOver(e, col) {
     const rect = cardEls[i].getBoundingClientRect()
     if (e.clientY < rect.top + rect.height / 2) {
       index = i
-      y = rect.top - containerRect.top - 4
+      y = rect.top - containerRect.top + container.scrollTop - 4
       break
     }
   }
   if (y === null) {
     y = cardEls.length
-      ? cardEls[cardEls.length - 1].getBoundingClientRect().bottom - containerRect.top + 4
+      ? cardEls[cardEls.length - 1].getBoundingClientRect().bottom - containerRect.top + container.scrollTop + 4
       : 8
   }
   subDragOverCol.status = col.status
@@ -392,6 +463,37 @@ function startEdit() {
   edit.column_id   = card.value.column_id
   edit.due_date    = tsToDate(card.value.due_date)
 }
+
+// Несохранённые изменения — сравниваем форму с последними сохранёнными данными карточки
+const isDirty = computed(() => {
+  if (!editMode.value || !card.value) return false
+  return edit.title !== card.value.title
+    || edit.description !== (card.value.description || '')
+    || edit.priority !== card.value.priority
+    || edit.assignee_id !== card.value.assignee_id
+    || edit.column_id !== card.value.column_id
+    || edit.due_date !== tsToDate(card.value.due_date)
+})
+
+async function toggleEdit() {
+  if (editMode.value && isDirty.value) {
+    if (!await confirmDialog('Есть несохранённые данные. Закрыть без сохранения?')) return
+    startEdit() // возвращаем форму к последним сохранённым значениям
+  }
+  editMode.value = !editMode.value
+}
+
+function handleBeforeUnload(e) {
+  if (!isDirty.value) return
+  e.preventDefault()
+  e.returnValue = ''
+}
+window.addEventListener('beforeunload', handleBeforeUnload)
+
+onBeforeRouteLeave(async () => {
+  if (!isDirty.value) return true
+  return await confirmDialog('Есть несохранённые данные. Уйти со страницы без сохранения?')
+})
 async function saveCard() {
   const r = await apiFetch(`${API}/api/kanban/cards/${card.value.id}`, {
     method: 'PATCH',
@@ -403,7 +505,7 @@ async function saveCard() {
   await loadCard()
 }
 async function deleteCard() {
-  if (!confirm('Удалить задачу и все подзадачи?')) return
+  if (!await confirmDialog('Удалить задачу и все подзадачи?', { danger: true, confirmLabel: 'Удалить' })) return
   const r = await apiFetch(`${API}/api/kanban/cards/${card.value.id}`, { method: 'DELETE' })
   if (!r) return
   router.push('/kanban')
@@ -422,18 +524,70 @@ async function unarchive() {
 // ─── Subtask modal ────────────────────────────────────────
 const subModal = reactive({
   open: false, mode: 'create', id: null,
-  title: '', description: '', priority: 'medium', assignee_id: null
+  title: '', description: '', priority: 'medium', assignee_id: null, tags: []
+})
+let subModalSnapshot = null
+
+// Все теги, когда-либо созданные в проекте — для автокомплита при вводе.
+const allTags = ref([])
+const tagInput = ref('')
+const showTagSuggestions = ref(false)
+const tagSuggestions = computed(() => {
+  const q = tagInput.value.trim().toLowerCase()
+  if (!q) return []
+  const existingNames = new Set(subModal.tags.map(t => t.name.toLowerCase()))
+  return allTags.value
+    .filter(t => t.name.toLowerCase().includes(q) && !existingNames.has(t.name.toLowerCase()))
+    .slice(0, 6)
 })
 
 function openAddSubtask() {
   subModal.open = true; subModal.mode = 'create'
   subModal.id = null; subModal.title = ''; subModal.description = ''
-  subModal.priority = 'medium'; subModal.assignee_id = null
+  subModal.priority = 'medium'; subModal.assignee_id = null; subModal.tags = []
+  subModalSnapshot = { title: '', description: '' }
 }
 function openEditSubtask(sub) {
   subModal.open = true; subModal.mode = 'edit'
   subModal.id = sub.id; subModal.title = sub.title; subModal.description = sub.description || ''
   subModal.priority = sub.priority; subModal.assignee_id = sub.assignee_id
+  subModal.tags = sub.tags ? [...sub.tags] : []
+  subModalSnapshot = { title: subModal.title, description: subModal.description }
+}
+function onTagInputBlur() {
+  // небольшая задержка, чтобы успел сработать @mousedown на подсказке —
+  // иначе blur закрывает список раньше клика по нему
+  setTimeout(() => { showTagSuggestions.value = false }, 150)
+}
+async function submitTagInput() {
+  const name = tagInput.value.trim()
+  if (!name) return
+  await addSubtaskTag(name)
+}
+async function addSubtaskTag(name) {
+  const r = await apiFetch(`${API}/api/kanban/subtasks/${subModal.id}/tags`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name })
+  })
+  if (!r) return
+  subModal.tags = await r.json()
+  tagInput.value = '' // tagSuggestions сам опустеет на пустом запросе — дропдаун скроется естественно
+  const known = allTags.value.some(t => t.name.toLowerCase() === name.trim().toLowerCase())
+  if (!known) allTags.value = await (await apiFetch(`${API}/api/kanban/tags`))?.json() || allTags.value
+}
+async function removeSubtaskTag(tag) {
+  const r = await apiFetch(`${API}/api/kanban/subtasks/${subModal.id}/tags/${tag.id}`, { method: 'DELETE' })
+  if (!r) return
+  subModal.tags = await r.json()
+}
+async function closeSubModal() {
+  const dirty = subModalSnapshot && (
+    subModal.title !== subModalSnapshot.title ||
+    subModal.description !== subModalSnapshot.description
+  )
+  if (dirty && !await confirmDialog('Есть несохранённые данные. Закрыть без сохранения?')) return
+  subModal.open = false
 }
 async function saveSubtask() {
   if (!subModal.title.trim()) return
@@ -455,7 +609,7 @@ async function saveSubtask() {
         body: JSON.stringify(body)
       })
   if (!r) return // модалка остаётся открытой, ничего не потеряно
-  subModal.open = false
+  subModal.open = false // напрямую — уже сохранено, спрашивать не о чем
   await loadCard()
 }
 async function deleteSubtask() {
@@ -483,17 +637,21 @@ function formatDate(ts) {
 }
 
 let offSocket
+function resetSubDragHandle() { subDragHandleGrabbed.value = false }
 onMounted(async () => {
   if (!store.user) { router.push('/'); return }
   if (!store.folders.length) await store.fetchFolders()
   await loadCard()
   if (card.value) startEdit()
-  const [ur, br] = await Promise.all([
+  const [ur, br, tr] = await Promise.all([
     apiFetch(`${API}/api/users`),
-    apiFetch(`${API}/api/kanban`)
+    apiFetch(`${API}/api/kanban`),
+    apiFetch(`${API}/api/kanban/tags`)
   ])
   if (ur) users.value   = await ur.json()
   if (br) columns.value = await br.json()
+  if (tr) allTags.value = await tr.json()
+  window.addEventListener('mouseup', resetSubDragHandle)
   const socket = store.getSocket()
   if (socket) {
     socket.on('kanban:card:update', (cardId) => {
@@ -504,7 +662,11 @@ onMounted(async () => {
     offSocket = () => socket.off('kanban:card:update')
   }
 })
-onUnmounted(() => offSocket?.())
+onUnmounted(() => {
+  offSocket?.()
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+  window.removeEventListener('mouseup', resetSubDragHandle)
+})
 </script>
 
 <style scoped>
@@ -553,7 +715,7 @@ onUnmounted(() => offSocket?.())
 
 .card-page-content {
   display: grid; grid-template-columns: 360px 1fr;
-  flex: 1; overflow: hidden;
+  flex: 1; min-height: 0; overflow: hidden;
 }
 .card-info {
   padding: 20px; overflow-y: auto;
@@ -579,27 +741,13 @@ onUnmounted(() => offSocket?.())
 }
 .btn-edit-card:hover { border-color: var(--accent-line); color: var(--accent); }
 .btn-archive-card:hover { border-color: #e8af34; color: #e8af34; }
+.btn-icon-only { padding: 5px; }
 
 .card-page-title { font-size: var(--text-xl); font-weight: 700; line-height: 1.3; }
 .card-page-desc { font-size: var(--text-sm); color: var(--text-muted); line-height: 1.6; white-space: pre-wrap; }
 .card-page-desc.empty { color: var(--text-faint); font-style: italic; }
 
 /* Edit form */
-.field-label { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; display: block; }
-.field-input, .field-select {
-  width: 100%; background: var(--surface-3); border: 1px solid var(--border);
-  border-radius: var(--radius-md); padding: 8px 12px; font-size: var(--text-sm);
-  color: var(--text); transition: border-color var(--transition);
-}
-.field-input:focus, .field-select:focus { outline: none; border-color: var(--accent-line); }
-.field-textarea {
-  width: 100%; resize: vertical; min-height: 80px;
-  background: var(--surface-3); border: 1px solid var(--border);
-  border-radius: var(--radius-md); padding: 8px 12px;
-  font-size: var(--text-sm); font-family: inherit; color: var(--text);
-  transition: border-color var(--transition);
-}
-.field-textarea:focus { outline: none; border-color: var(--accent-line); }
 .edit-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .edit-group { display: flex; flex-direction: column; gap: 4px; }
 .edit-actions { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -648,7 +796,7 @@ onUnmounted(() => offSocket?.())
 .btn-delete-card:hover { background: rgba(224,108,117,.25); }
 
 /* ── Subtasks board ── */
-.subtasks-area { display: flex; flex-direction: column; overflow: hidden; padding: 20px; gap: 16px; }
+.subtasks-area { display: flex; flex-direction: column; overflow: hidden; padding: 20px; gap: 16px; min-height: 0; }
 .subtasks-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
 .subtasks-title { font-size: var(--text-base); font-weight: 700; }
 .btn-add-subtask {
@@ -660,16 +808,15 @@ onUnmounted(() => offSocket?.())
 }
 .btn-add-subtask:hover { background: var(--accent-hover); }
 
-.subtasks-board { display: flex; gap: 12px; overflow-x: auto; flex: 1; align-items: flex-start; }
-.subtasks-board::-webkit-scrollbar { height: 6px; }
-.subtasks-board::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.subtasks-board { display: flex; gap: 12px; overflow-x: auto; flex: 1; min-height: 0; align-items: stretch; }
+.subtasks-board::-webkit-scrollbar { height: 6px; } /* горизонтальный скролл толще — легче ухватить */
 
 .sub-col {
   flex: 1; min-width: 200px;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   display: flex; flex-direction: column;
-  max-height: calc(100vh - 200px);
+  max-height: 100%;
   transition: border-color .15s;
 }
 .sub-col.drag-over { border-color: var(--accent); background: var(--accent-soft); }
@@ -689,8 +836,6 @@ onUnmounted(() => offSocket?.())
   display: flex; flex-direction: column; gap: 6px;
   padding: 4px 8px 10px; overflow-y: auto; flex: 1;
 }
-.sub-col-cards::-webkit-scrollbar { width: 3px; }
-.sub-col-cards::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
 .drop-line {
   position: absolute; left: 8px; right: 8px;
@@ -722,13 +867,28 @@ onUnmounted(() => offSocket?.())
 .toast-fade-enter-from, .toast-fade-leave-to { opacity: 0; transform: translateX(-50%) translateY(6px); }
 
 .sub-card {
+  position: relative;
   background: var(--surface-2); border: 1px solid var(--border);
-  border-radius: var(--radius-md); padding: 8px 10px;
-  cursor: grab; transition: box-shadow .15s, opacity .15s;
+  border-radius: var(--radius-md); padding: 8px 10px 8px 22px;
+  cursor: pointer; transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease;
   user-select: none;
+  will-change: transform;
 }
-.sub-card:hover { box-shadow: var(--shadow-md); border-color: var(--accent-line); }
-.sub-card.dragging { opacity: .4; }
+.sub-card:hover { box-shadow: var(--shadow-md); border-color: var(--accent-line); transform: translateY(-2px); }
+.sub-card:active { transform: translateY(0) scale(.99); }
+.sub-card.dragging { opacity: .4; transition: none; }
+.sub-card-drag-handle {
+  position: absolute; left: 3px; top: 0; bottom: 0;
+  width: 15px; display: flex; align-items: center; justify-content: center;
+  color: var(--text-faint); cursor: grab;
+  opacity: 0; transition: opacity var(--transition), color var(--transition);
+}
+.sub-card:hover .sub-card-drag-handle { opacity: 1; }
+.sub-card-drag-handle:hover { color: var(--accent); }
+.sub-card-drag-handle:active { cursor: grabbing; }
+@media (hover: none) {
+  .sub-card-drag-handle { opacity: 1; }
+}
 .sub-card-priority {
   font-size: 9px; font-weight: 700; padding: 1px 6px;
   border-radius: 20px; display: inline-flex; align-items: center; gap: 3px; margin-bottom: 4px;
@@ -747,6 +907,55 @@ onUnmounted(() => offSocket?.())
   width: 18px; height: 18px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center; font-size: .7rem; flex-shrink: 0;
 }
+
+/* Tag filter row */
+.tags-filter-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  padding: 0 0 10px;
+}
+.tags-filter-icon { color: var(--text-faint); flex-shrink: 0; }
+.filter-chip-tag {
+  cursor: pointer; border: 1px solid transparent;
+  transition: all var(--transition);
+}
+.filter-chip-tag.active { border-color: rgba(255,255,255,.3); }
+.tags-filter-clear {
+  font-size: var(--text-xs); color: var(--text-faint); font-weight: 600;
+  padding: 2px 6px; transition: color var(--transition);
+}
+.tags-filter-clear:hover { color: var(--text); }
+
+/* Tags */
+.sub-card-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 6px; }
+.tag-chip {
+  font-size: 10px; font-weight: 600; padding: 2px 8px;
+  border-radius: var(--radius-full); white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.tag-chip.removable { padding-right: 4px; }
+.tag-remove {
+  display: flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; border-radius: 50%;
+  opacity: .7; transition: opacity var(--transition), background var(--transition);
+}
+.tag-remove:hover { opacity: 1; background: rgba(0,0,0,.12); }
+.tags-hint { font-size: var(--text-xs); color: var(--text-faint); padding: 4px 0 8px; }
+.tags-current { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; min-height: 22px; }
+.tags-empty { font-size: var(--text-xs); color: var(--text-faint); }
+.tags-input-row { position: relative; }
+.tags-input { width: 100%; }
+.tags-suggestions {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md); z-index: 10; overflow: hidden;
+}
+.tag-suggestion {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 10px; font-size: var(--text-xs); color: var(--text);
+  transition: background var(--transition);
+}
+.tag-suggestion:hover { background: var(--hover); }
+.tag-suggestion-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
 /* Modal */
 .modal-overlay {
@@ -778,4 +987,58 @@ onUnmounted(() => offSocket?.())
   padding: 12px 20px 16px; border-top: 1px solid var(--border);
 }
 .modal-footer-right { display: flex; gap: 8px; }
+
+@media (max-width: 860px) {
+  .card-page-layout { grid-template-columns: 1fr; }
+
+  .breadcrumb {
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    gap: 6px;
+  }
+  .breadcrumb-current {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+
+  .card-page-content {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .card-info {
+    flex-shrink: 0;
+    max-height: 42dvh;
+    overflow-y: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .card-info-header { flex-wrap: wrap; }
+  .card-info-actions { flex-wrap: wrap; }
+
+  .subtasks-area {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding: 16px 12px;
+  }
+  .subtasks-board {
+    flex: 1;
+    min-height: 0;
+    align-items: stretch;
+    padding-bottom: 4px;
+  }
+  .sub-col {
+    flex: 0 0 auto;
+    width: min(260px, calc(100vw - 40px));
+    min-width: min(260px, calc(100vw - 40px));
+    max-height: 100%;
+  }
+
+  .edit-row { grid-template-columns: 1fr; }
+  .modal-footer { flex-direction: column; align-items: stretch; gap: 10px; }
+  .modal-footer-right { justify-content: flex-end; }
+}
 </style>

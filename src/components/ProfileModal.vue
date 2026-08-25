@@ -132,6 +132,7 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
+import { confirmDialog } from '@/composables/useConfirm'
 import {
   X, Calendar, Palette, Smile, Paintbrush,
   Pencil, MessageCircle, RefreshCw, LogOut, Check
@@ -209,8 +210,8 @@ function switchAccount() {
   router.push('/')
 }
 
-function logout() {
-  if (!confirm('Выйти из аккаунта?')) return
+async function logout() {
+  if (!await confirmDialog('Выйти из аккаунта?')) return
   store.logout()
   emit('close')
   router.push('/')
@@ -367,16 +368,6 @@ function formatDate(ts) {
 .color-dot:hover { transform: scale(1.15); }
 .color-dot.active { border-color: var(--text); transform: scale(1.18); }
 
-.field-input {
-  background: var(--surface-3); border: 1px solid var(--border);
-  border-radius: var(--radius-md); padding: var(--space-3) var(--space-4);
-  font-size: var(--text-sm); color: var(--text); width: 100%;
-  transition: border-color var(--transition), box-shadow var(--transition);
-}
-.field-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.field-input.field-error { border-color: #e06c75; }
-.field-input.field-error:focus { box-shadow: 0 0 0 3px rgba(224,108,117,.15); }
-.field-textarea { resize: vertical; min-height: 72px; font-family: inherit; }
 .error-text { font-size: 11px; color: #e06c75; font-weight: 600; }
 .char-count { font-size: 11px; color: var(--text-faint); text-align: right; }
 .char-count.warn { color: #e8af34; font-weight: 600; }

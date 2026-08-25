@@ -1,5 +1,10 @@
 <template>
-  <aside class="sidebar">
+  <Teleport to="body">
+    <Transition name="sidebar-backdrop-fade">
+      <div v-if="mobile.state.open" class="sidebar-backdrop" @click="mobile.close()"></div>
+    </Transition>
+  </Teleport>
+  <aside class="sidebar" :class="{ 'mobile-open': mobile.state.open }">
     <!-- TitleBar убран отсюда — он теперь в ChatView.vue над всем лейаутом -->
     <div class="sidebar-header">
       <svg class="logo" viewBox="0 0 32 32" fill="none">
@@ -14,6 +19,7 @@
         <Sun v-if="store.theme === 'dark'" :size="15" :stroke-width="2" />
         <Moon v-else :size="15" :stroke-width="2" />
       </button>
+      <button class="icon-btn mobile-close-btn" @click="mobile.close()" title="Закрыть"><X :size="16" :stroke-width="2.2" /></button>
     </div>
 
     <div class="user-badge" @click="showProfile = true" title="Настройки профиля">
@@ -57,7 +63,7 @@
       <button
         class="channel-item kanban-btn"
         :class="{ active: $route.name === 'kanban' }"
-        @click="router.push('/kanban')"
+        @click="router.push('/kanban'); mobile.close()"
       >
         <LayoutDashboard class="ch-icon" :size="14" :stroke-width="2" />
         <span class="ch-name">Канбан</span>
@@ -91,9 +97,11 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import EditSidebar from './EditSidebar.vue'
 import ProfileModal from './ProfileModal.vue'
-import { Settings, Sun, Moon, Search, ChevronRight, LayoutDashboard } from 'lucide-vue-next'
+import { Settings, Sun, Moon, Search, ChevronRight, LayoutDashboard, X } from 'lucide-vue-next'
+import { useMobileSidebar } from '@/composables/useMobileSidebar'
 // TitleBar импорт убран
 
+const mobile = useMobileSidebar()
 const showProfile = ref(false)
 const store   = useAppStore()
 const router  = useRouter()
@@ -115,6 +123,7 @@ function toggleFolder(id) { collapsed.value[id] = !collapsed.value[id] }
 function go(channelId) {
   store.setChannel(channelId)
   router.push({ name: 'chat', params: { channelId } })
+  mobile.close()
 }
 
 function onlineInChannel(channelId) {
@@ -240,5 +249,32 @@ function onlineInChannel(channelId) {
   padding: var(--space-2) var(--space-2) 0;
   border-top: 1px solid var(--divider);
 }
+
+.mobile-close-btn { display: none; } /* видна только в мобильной раскладке */
+
+/* ── Мобильный drawer ──────────────────
+   Ширина сайдбара сама по себе (240px через grid-template-columns в
+   ChatView/KanbanView/KanbanCardView) съедала почти весь экран на узких
+   viewport'ах — превращаем его в наезжающую панель поверх контента. */
+@media (max-width: 860px) {
+  .sidebar {
+    position: fixed; inset: 0 auto 0 0;
+    width: min(300px, 84vw);
+    z-index: 1500;
+    transform: translateX(-100%);
+    transition: transform .22s ease;
+    box-shadow: var(--shadow-lg);
+  }
+  .sidebar.mobile-open { transform: translateX(0); }
+  .mobile-close-btn { display: flex; }
+}
+
+.sidebar-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.5);
+  z-index: 1400;
+}
+.sidebar-backdrop-fade-enter-active, .sidebar-backdrop-fade-leave-active { transition: opacity .2s ease; }
+.sidebar-backdrop-fade-enter-from, .sidebar-backdrop-fade-leave-to { opacity: 0; }
 
 </style>
