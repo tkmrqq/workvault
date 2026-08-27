@@ -1,11 +1,12 @@
 {
   "name": "workvault",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "workvault",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
+    "build:electron-renderer": "cross-env BUILD_TARGET=electron vite build",
     "build:electron": "cross-env BUILD_TARGET=electron vite build && electron-builder --publish never",
     "preview": "vite preview",
     "electron": "electron .",

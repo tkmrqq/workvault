@@ -30,9 +30,14 @@
       <span class="online-dot" title="Онлайн" />
     </div>
 
-    <div class="search-box">
-      <Search class="search-icon" :size="13" :stroke-width="2" />
-      <input v-model="search" placeholder="Поиск..." />
+    <div class="search-row">
+      <div class="search-box">
+        <Search class="search-icon" :size="13" :stroke-width="2" />
+        <input v-model="search" placeholder="Поиск..." />
+      </div>
+      <button class="cp-trigger" @click="cp.open()" title="Быстрые команды (Ctrl+K)">
+        <Command :size="14" :stroke-width="2" />
+      </button>
     </div>
 
     <nav class="channel-nav">
@@ -97,11 +102,13 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import EditSidebar from './EditSidebar.vue'
 import ProfileModal from './ProfileModal.vue'
-import { Settings, Sun, Moon, Search, ChevronRight, LayoutDashboard, X } from 'lucide-vue-next'
+import { Settings, Sun, Moon, Search, ChevronRight, LayoutDashboard, X, Command } from 'lucide-vue-next'
 import { useMobileSidebar } from '@/composables/useMobileSidebar'
+import { useCommandPalette } from '@/composables/useCommandPalette'
 // TitleBar импорт убран
 
 const mobile = useMobileSidebar()
+const cp = useCommandPalette()
 const showProfile = ref(false)
 const store   = useAppStore()
 const router  = useRouter()
@@ -175,9 +182,10 @@ function onlineInChannel(channelId) {
   background: var(--green); flex-shrink: 0;
 }
 
+.search-row { display: flex; align-items: center; gap: 6px; margin: var(--space-3); }
 .search-box {
   display: flex; align-items: center; gap: var(--space-2);
-  margin: var(--space-3);
+  flex: 1;
   background: var(--surface-3); border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: var(--space-2) var(--space-3);
@@ -185,6 +193,13 @@ function onlineInChannel(channelId) {
 }
 .search-box:focus-within { border-color: var(--accent-line); }
 .search-icon { color: var(--text-faint); flex-shrink: 0; }
+.cp-trigger {
+  display: flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; flex-shrink: 0;
+  background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius-md);
+  color: var(--text-faint); transition: all var(--transition);
+}
+.cp-trigger:hover { border-color: var(--accent-line); color: var(--accent); }
 .search-box input {
   background: none; border: none; outline: none;
   font-size: var(--text-xs); color: var(--text); width: 100%;

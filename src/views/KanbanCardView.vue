@@ -127,7 +127,12 @@
           <div class="subtasks-area">
             <div class="subtasks-header">
               <h2 class="subtasks-title">Подзадачи</h2>
-              <button class="btn-add-subtask" @click="openAddSubtask"><Plus :size="13" :stroke-width="2.5" /> Добавить</button>
+              <div class="subtasks-header-actions">
+                <button class="btn-list-count" @click="openSubListModal" title="Экспорт / импорт списком">
+                  <ListChecks :size="13" :stroke-width="2" /> {{ card.subtasks?.length || 0 }}
+                </button>
+                <button class="btn-add-subtask" @click="openAddSubtask"><Plus :size="13" :stroke-width="2.5" /> Добавить</button>
+              </div>
             </div>
 
             <div v-if="filterableTags.length" class="tags-filter-row">
@@ -158,7 +163,7 @@
                 </div>
 
                 <div class="sub-col-cards">
-                  <div v-if="subDragOverCol.status === col.status" class="drop-line" :style="{ top: subDragOverCol.y + 'px' }"></div>
+                  <div v-if="subDragOverCol.status === col.status && col.items.length" class="drop-line" :style="{ top: subDragOverCol.y + 'px' }"></div>
                   <div
                     v-for="sub in col.items"
                     :key="sub.id"
@@ -188,7 +193,7 @@
                       {{ sub.assignee_name }}
                     </div>
                   </div>
-                  <div v-if="!col.items.length" class="sub-col-empty">Перетащите сюда</div>
+                  <div v-if="!col.items.length" class="sub-col-empty" :class="{ 'drag-over': subDragOverCol.status === col.status }">Перетащите сюда</div>
                 </div>
               </div>
             </div>
@@ -281,6 +286,50 @@
         </div>
       </div>
     </Teleport>
+
+    <!-- Modal: Subtasks list export/import -->
+    <Teleport to="body">
+      <div v-if="subListModal.open" class="modal-overlay" @click.self="subListModal.open = false">
+        <div class="modal list-modal">
+          <div class="modal-header">
+            <h2 class="modal-title-row"><ListChecks :size="17" :stroke-width="2" /> Список подзадач</h2>
+            <button class="modal-close" @click="subListModal.open = false"><X :size="14" :stroke-width="2.5" /></button>
+          </div>
+          <div class="modal-body list-modal-body">
+            <div class="list-section">
+              <div class="list-section-header">
+                <span class="field-label">Экспорт — все подзадачи этой карточки</span>
+                <div class="list-section-actions">
+                  <button class="btn-cancel btn-sm" @click="copySubExportText"><Copy :size="12" :stroke-width="2.2" /> Копировать</button>
+                  <button class="btn-cancel btn-sm" @click="downloadSubExportText"><Download :size="12" :stroke-width="2.2" /> .txt</button>
+                </div>
+              </div>
+              <textarea ref="subExportTextarea" class="field-textarea list-textarea" readonly :value="subExportText" rows="6" @click="$event.target.select()"></textarea>
+            </div>
+
+            <div class="list-section">
+              <label class="field-label">Импорт — вставь список, каждая подзадача с новой строки (можно с «- » в начале)</label>
+              <textarea
+                v-model="subImportText"
+                class="field-textarea list-textarea"
+                rows="6"
+                placeholder="- Первая подзадача&#10;- Вторая подзадача"
+              ></textarea>
+              <div class="import-controls">
+                <select v-model="subImportStatus" class="field-select">
+                  <option v-for="s in STATUSES" :key="s.status" :value="s.status">{{ s.label }}</option>
+                </select>
+                <button
+                  class="btn-save"
+                  :disabled="!subImportLines.length || subImporting"
+                  @click="runSubImport"
+                >{{ subImporting ? 'Добавляю...' : `Добавить ${subImportLines.length || ''} подзадач` }}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -296,7 +345,8 @@ import MarkdownEditor from '@/components/MarkdownEditor.vue'
 import { renderMarkdown } from '@/composables/useMarkdown'
 import {
   ArrowLeft, Archive, RotateCcw, Pencil, X, Plus,
-  ArrowDown, ArrowRight as ArrowRightIcon, ArrowUp as ArrowUpIcon, Tag, GripVertical
+  ArrowDown, ArrowRight as ArrowRightIcon, ArrowUp as ArrowUpIcon, Tag, GripVertical,
+  ListChecks, Copy, Download
 } from 'lucide-vue-next'
 
 const store  = useAppStore()
@@ -359,6 +409,70 @@ const subtaskCols = computed(() => STATUSES.map(s => ({
 })))
 
 const doneCount   = computed(() => (card.value?.subtasks || []).filter(s => s.status === 'done').length)
+
+// ─── Subtasks list export/import ────────────────────────────
+const subListModal = reactive({ open: false })
+const subImportText = ref('')
+const subImportStatus = ref('todo')
+const subImporting = ref(false)
+const subExportTextarea = ref(null)
+
+const subExportText = computed(() => {
+  return STATUSES
+    .map(s => {
+      const items = (card.value?.subtasks || []).filter(t => t.status === s.status)
+      if (!items.length) return null
+      return `## ${s.label}\n${items.map(t => `- ${t.title}`).join('\n')}`
+    })
+    .filter(Boolean)
+    .join('\n\n')
+})
+const subImportLines = computed(() => {
+  return subImportText.value
+    .split('\n')
+    .map(l => l.replace(/^[\s]*[-*•]\s*/, '').trim())
+    .filter(l => l && !l.startsWith('#'))
+})
+
+function openSubListModal() {
+  subListModal.open = true
+  subImportText.value = ''
+  subImportStatus.value = 'todo'
+}
+async function copySubExportText() {
+  try {
+    await navigator.clipboard.writeText(subExportText.value)
+  } catch (e) {
+    subExportTextarea.value?.select()
+  }
+}
+function downloadSubExportText() {
+  const blob = new Blob([subExportText.value], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = `subtasks-card-${card.value?.id ?? ''}.txt`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+async function runSubImport() {
+  if (!subImportLines.value.length) return
+  subImporting.value = true
+  try {
+    for (const title of subImportLines.value) {
+      await apiFetch(`${API}/api/kanban/cards/${card.value.id}/subtasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, status: subImportStatus.value })
+      })
+    }
+    subImportText.value = ''
+    subListModal.open = false
+    await loadCard()
+  } finally {
+    subImporting.value = false
+  }
+}
+
 const progressPct = computed(() => {
   const total = card.value?.subtasks?.length || 0
   return total ? Math.round(doneCount.value / total * 100) : 0
@@ -799,6 +913,16 @@ onUnmounted(() => {
 .subtasks-area { display: flex; flex-direction: column; overflow: hidden; padding: 20px; gap: 16px; min-height: 0; }
 .subtasks-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
 .subtasks-title { font-size: var(--text-base); font-weight: 700; }
+.subtasks-header-actions { display: flex; align-items: center; gap: 8px; }
+.btn-list-count {
+  display: flex; align-items: center; gap: 5px;
+  padding: 6px 10px; border-radius: var(--radius-md);
+  font-size: var(--text-xs); font-weight: 700;
+  background: var(--surface-3); color: var(--text-muted);
+  border: 1px solid var(--border);
+  transition: all var(--transition);
+}
+.btn-list-count:hover { background: var(--hover); color: var(--text); }
 .btn-add-subtask {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 6px 14px; border-radius: var(--radius-md);
@@ -845,15 +969,15 @@ onUnmounted(() => {
   z-index: 5;
   transition: top .08s ease;
 }
-.drop-line::before {
-  content: ''; position: absolute; left: -4px; top: -3px;
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--accent);
-}
 .sub-col-empty {
   margin: 4px 4px 8px; padding: 14px 8px;
   border: 1.5px dashed var(--border); border-radius: var(--radius-md);
   text-align: center; font-size: 11px; color: var(--text-faint);
+  transition: all var(--transition);
+}
+.sub-col-empty.drag-over {
+  border-color: var(--accent); border-style: solid;
+  background: var(--accent-soft); color: var(--accent);
 }
 
 /* Error toast */
@@ -869,7 +993,7 @@ onUnmounted(() => {
 .sub-card {
   position: relative;
   background: var(--surface-2); border: 1px solid var(--border);
-  border-radius: var(--radius-md); padding: 8px 10px 8px 22px;
+  border-radius: var(--radius-md); padding: 8px 24px 8px 10px;
   cursor: pointer; transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease;
   user-select: none;
   will-change: transform;
@@ -878,8 +1002,8 @@ onUnmounted(() => {
 .sub-card:active { transform: translateY(0) scale(.99); }
 .sub-card.dragging { opacity: .4; transition: none; }
 .sub-card-drag-handle {
-  position: absolute; left: 3px; top: 0; bottom: 0;
-  width: 15px; display: flex; align-items: center; justify-content: center;
+  position: absolute; top: 6px; right: 6px;
+  width: 15px; height: 15px; display: flex; align-items: center; justify-content: center;
   color: var(--text-faint); cursor: grab;
   opacity: 0; transition: opacity var(--transition), color var(--transition);
 }
@@ -969,6 +1093,15 @@ onUnmounted(() => {
   animation: modalIn .2s ease forwards;
 }
 @keyframes modalIn { from { opacity: 0; transform: scale(.96) translateY(8px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+.modal-title-row { display: flex; align-items: center; gap: 8px; font-size: var(--text-base); font-weight: 700; }
+.list-modal { width: min(560px, 100%); max-height: 86vh; }
+.list-modal-body { max-height: 74vh; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
+.list-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.list-section-actions { display: flex; gap: 6px; }
+.btn-sm { padding: 5px 10px; font-size: var(--text-xs); display: flex; align-items: center; gap: 5px; }
+.list-textarea { width: 100%; font-family: var(--font-mono, monospace); font-size: var(--text-xs); resize: vertical; }
+.import-controls { display: flex; gap: 8px; margin-top: 10px; }
+.import-controls .field-select { flex: 1; }
 .modal-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 16px 20px 12px; border-bottom: 1px solid var(--border);
