@@ -268,7 +268,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { confirmDialog } from '@/composables/useConfirm'
 import TitleBar from '@/components/TitleBar.vue'
@@ -282,6 +282,7 @@ import {
 
 const store  = useAppStore()
 const router = useRouter()
+const route  = useRoute()
 const API    = import.meta.env.VITE_API_URL || ''
 
 const board  = ref([])
@@ -636,6 +637,11 @@ onMounted(async () => {
   await loadBoard()
   const r = await fetch(`${API}/api/users`)
   users.value = await r.json()
+
+  if (route.query.new) {
+    openCreate(null)
+    router.replace({ query: {} }) // подчищаем URL, чтобы обновление страницы не открывало модалку повторно
+  }
 
   // Клик по ручке без реального перетаскивания не порождает dragend —
   // без этого следующий обычный клик по телу карточки ошибочно считался бы разрешённым
