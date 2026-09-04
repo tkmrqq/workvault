@@ -32,6 +32,7 @@
           >
             <span class="avatar" :style="{ background: u.color + '22', color: u.color }">{{ u.avatar }}</span>
             <span class="uname">{{ u.name }}</span>
+            <span v-if="!u.has_password" class="badge-nopass">нет пароля</span>
             <ChevronRight class="arrow" :size="15" :stroke-width="2" />
           </button>
         </div>
@@ -40,7 +41,7 @@
 
         <div class="divider-line"><span>или создать новый</span></div>
 
-        <button class="create-btn" @click="step = 'create'">
+        <button class="create-btn" @click="startCreate">
           <Plus :size="15" :stroke-width="2.5" style="vertical-align:-2px;margin-right:4px" />Создать профиль
         </button>
 
@@ -49,9 +50,9 @@
         </a>
       </template>
 
-      <!-- ═══ ШАГ 2: ввод PIN (если есть) ═══ -->
-      <template v-else-if="step === 'pin'">
-        <button class="back-btn" @click="step = 'pick'; pinError = ''"><ArrowLeft :size="12" :stroke-width="2.5" style="vertical-align:-1px;margin-right:3px" />Назад</button>
+      <!-- ═══ ШАГ 2: ввод пароля (обычный вход) ═══ -->
+      <template v-else-if="step === 'password'">
+        <button class="back-btn" @click="step = 'pick'; password = ''; passError = ''"><ArrowLeft :size="12" :stroke-width="2.5" style="vertical-align:-1px;margin-right:3px" />Назад</button>
 
         <div class="pin-profile">
           <span class="avatar-lg" :style="{ background: selectedUser.color + '22', color: selectedUser.color }">
@@ -60,24 +61,67 @@
           <span class="pin-name">{{ selectedUser.name }}</span>
         </div>
 
-        <p class="subtitle">Введи PIN-код</p>
+        <p class="subtitle">Введи пароль</p>
 
-        <div class="pin-dots">
-          <div v-for="i in 4" :key="i" class="pin-dot" :class="{ filled: pin.length >= i }"/>
-        </div>
+        <input
+          ref="passInput"
+          v-model="password"
+          type="password"
+          placeholder="Пароль"
+          class="name-input"
+          autofocus
+          @input="passError = ''"
+          @keydown.enter="submitLogin"
+        />
 
-        <div class="pin-pad">
-          <button v-for="n in [1,2,3,4,5,6,7,8,9,'',0,'⌫']" :key="n"
-            class="pin-key"
-            :class="{ ghost: n === '' }"
-            @click="pinPress(n)"
-          ><Delete v-if="n === '⌫'" :size="18" :stroke-width="2" /><template v-else>{{ n }}</template></button>
-        </div>
+        <p v-if="passError" class="pin-error">{{ passError }}</p>
 
-        <p v-if="pinError" class="pin-error">{{ pinError }}</p>
+        <button class="login-btn" style="margin-top:12px" :disabled="!password || loading" @click="submitLogin">
+          <span v-if="!loading">Войти</span>
+          <span v-else>Входим...</span>
+        </button>
       </template>
 
-      <!-- ═══ ШАГ 3: создание нового пользователя ═══ -->
+      <!-- ═══ ШАГ 3: миграция — задать пароль старому аккаунту ═══ -->
+      <template v-else-if="step === 'setpassword'">
+        <button class="back-btn" @click="step = 'pick'; password = ''; password2 = ''; passError = ''"><ArrowLeft :size="12" :stroke-width="2.5" style="vertical-align:-1px;margin-right:3px" />Назад</button>
+
+        <div class="pin-profile">
+          <span class="avatar-lg" :style="{ background: selectedUser.color + '22', color: selectedUser.color }">
+            {{ selectedUser.avatar }}
+          </span>
+          <span class="pin-name">{{ selectedUser.name }}</span>
+        </div>
+
+        <p class="subtitle">У этого профиля ещё нет пароля — задай новый, не короче 6 символов</p>
+
+        <div class="new-user-form">
+          <input
+            v-model="password"
+            type="password"
+            placeholder="Новый пароль"
+            class="name-input"
+            @input="passError = ''"
+          />
+          <input
+            v-model="password2"
+            type="password"
+            placeholder="Повтори пароль"
+            class="name-input"
+            @input="passError = ''"
+            @keydown.enter="submitSetPassword"
+          />
+        </div>
+
+        <p v-if="passError" class="pin-error">{{ passError }}</p>
+
+        <button class="login-btn" :disabled="!canSubmitSetPassword || loading" @click="submitSetPassword">
+          <span v-if="!loading">Задать пароль и войти</span>
+          <span v-else>Сохраняем...</span>
+        </button>
+      </template>
+
+      <!-- ═══ ШАГ 4: создание нового пользователя — имя/аватар/цвет ═══ -->
       <template v-else-if="step === 'create'">
         <button class="back-btn" @click="step = 'pick'"><ArrowLeft :size="12" :stroke-width="2.5" style="vertical-align:-1px;margin-right:3px" />Назад</button>
         <h1>Новый профиль</h1>
@@ -105,42 +149,47 @@
             maxlength="24"
             class="name-input"
             @input="createError = ''"
-            @keydown.enter="newName.trim() && (step = 'setpin')"
+            @keydown.enter="newName.trim() && (step = 'createpassword')"
           />
         </div>
 
         <p v-if="createError" class="pin-error">{{ createError }}</p>
 
-        <button class="login-btn" :disabled="!newName.trim()" @click="step = 'setpin'">
+        <button class="login-btn" :disabled="!newName.trim()" @click="step = 'createpassword'">
           Далее <ArrowRight :size="15" :stroke-width="2.5" style="vertical-align:-2px;margin-left:2px" />
         </button>
       </template>
 
-      <!-- ═══ ШАГ 4: установить PIN (опционально) ═══ -->
-      <template v-else-if="step === 'setpin'">
+      <!-- ═══ ШАГ 5: пароль для нового профиля ═══ -->
+      <template v-else-if="step === 'createpassword'">
         <button class="back-btn" @click="step = 'create'"><ArrowLeft :size="12" :stroke-width="2.5" style="vertical-align:-1px;margin-right:3px" />Назад</button>
-        <h1>Установить PIN?</h1>
-        <p class="subtitle">Защити профиль 4-значным PIN-кодом. Можно пропустить.</p>
+        <h1>Придумай пароль</h1>
+        <p class="subtitle">Не короче 6 символов — понадобится для входа в следующий раз</p>
 
-        <div class="pin-dots">
-          <div v-for="i in 4" :key="i" class="pin-dot" :class="{ filled: newPin.length >= i }"/>
+        <div class="new-user-form">
+          <input
+            v-model="password"
+            type="password"
+            placeholder="Пароль"
+            class="name-input"
+            @input="passError = ''"
+          />
+          <input
+            v-model="password2"
+            type="password"
+            placeholder="Повтори пароль"
+            class="name-input"
+            @input="passError = ''"
+            @keydown.enter="submitRegister"
+          />
         </div>
 
-        <div class="pin-pad">
-          <button v-for="n in [1,2,3,4,5,6,7,8,9,'',0,'⌫']" :key="n"
-            class="pin-key"
-            :class="{ ghost: n === '' }"
-            @click="newPinPress(n)"
-          ><Delete v-if="n === '⌫'" :size="18" :stroke-width="2" /><template v-else>{{ n }}</template></button>
-        </div>
+        <p v-if="passError" class="pin-error">{{ passError }}</p>
 
-        <div class="setpin-actions">
-          <button class="skip-btn" @click="createAndLogin(false)">Без PIN</button>
-          <button class="login-btn" style="flex:1" :disabled="newPin.length < 4" @click="createAndLogin(true)">
-            <span v-if="!loading" class="login-btn-row">Создать <ArrowRight :size="15" :stroke-width="2.5" /></span>
-            <span v-else>Создаём...</span>
-          </button>
-        </div>
+        <button class="login-btn" :disabled="!canSubmitSetPassword || loading" @click="submitRegister">
+          <span v-if="!loading" class="login-btn-row">Создать <ArrowRight :size="15" :stroke-width="2.5" /></span>
+          <span v-else>Создаём...</span>
+        </button>
       </template>
 
     </div>
@@ -148,39 +197,44 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
-import { ChevronRight, Plus, ArrowLeft, ArrowRight, Delete } from 'lucide-vue-next'
+import { ChevronRight, Plus, ArrowLeft, ArrowRight } from 'lucide-vue-next'
 
 const store  = useAppStore()
 const router = useRouter()
 const API    = import.meta.env.VITE_API_URL || ''
 
-const step        = ref('pick')   // pick | pin | create | setpin
-const mounted     = ref(false)
-const loading     = ref(false)
+const step         = ref('pick') // pick | password | setpassword | create | createpassword
+const mounted      = ref(false)
+const loading      = ref(false)
 const loadingUsers = ref(true)
 
-const allUsers    = ref([])
+const allUsers     = ref([])
 const selectedUser = ref(null)
+const passInput    = ref(null)
 
-// PIN-вход
-const pin      = ref('')
-const pinError = ref('')
+// Вход / установка пароля
+const password  = ref('')
+const password2 = ref('')
+const passError = ref('')
 const createError = ref('')
 
-// Создание
+// Создание нового профиля
 const newName   = ref('')
 const newAvatar = ref('🧑')
 const newColor  = ref('#7c6af7')
-const newPin    = ref('')
 
 const avatars = ['🧑','👩','👨','🧔','👩‍💻','👨‍💻','🦊','🐼','🐻','🐸','🤖','👾']
 const colors  = ['#7c6af7','#4caf7d','#e8956d','#e06c75','#e8af34','#61afef','#c678dd','#56b6c2']
 
 const downloadUrl = ref('')
 const isElectron  = !!window.electronAPI
+
+const canSubmitSetPassword = computed(() =>
+  password.value.length >= 6 && password.value === password2.value
+)
 
 // ─── Загрузка пользователей с сервера ────────────────────
 async function loadUsers() {
@@ -193,81 +247,68 @@ async function loadUsers() {
 }
 
 // ─── Выбор пользователя ───────────────────────────────────
-function pickUser(u) {
+async function pickUser(u) {
   selectedUser.value = u
-  pin.value  = ''
-  pinError.value = ''
-  if (u.has_pin) {
-    step.value = 'pin'
-  } else {
-    loginAs(u)
-  }
+  password.value = ''; password2.value = ''; passError.value = ''
+  step.value = u.has_password ? 'password' : 'setpassword'
+  await nextTick()
+  passInput.value?.focus()
 }
 
-// ─── PIN-пад для входа ────────────────────────────────────
-function pinPress(n) {
-  if (n === '⌫') { pin.value = pin.value.slice(0, -1); pinError.value = ''; return }
-  if (n === '' || pin.value.length >= 4) return
-  pin.value += String(n)
-  if (pin.value.length === 4) verifyPin()
+function startCreate() {
+  newName.value = ''; createError.value = ''
+  password.value = ''; password2.value = ''; passError.value = ''
+  step.value = 'create'
 }
 
-async function verifyPin() {
-  try {
-    const r = await fetch(`${API}/api/users/${selectedUser.value.id}/verify-pin`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pin: pin.value })
-    })
-    const d = await r.json()
-    if (d.ok) {
-      loginAs(selectedUser.value)
-    } else {
-      pinError.value = 'Неверный PIN'
-      pin.value = ''
-    }
-  } catch {
-    pinError.value = 'Ошибка сервера'
-    pin.value = ''
-  }
-}
-
-// ─── PIN-пад для создания ─────────────────────────────────
-function newPinPress(n) {
-  if (n === '⌫') { newPin.value = newPin.value.slice(0, -1); return }
-  if (n === '' || newPin.value.length >= 4) return
-  newPin.value += String(n)
-}
-
-// ─── Создание + вход ─────────────────────────────────────
-async function createAndLogin(withPin) {
-  if (loading.value) return
+// ─── Обычный вход ──────────────────────────────────────────
+async function submitLogin() {
+  if (!password.value || loading.value) return
   loading.value = true
-  createError.value = ''
+  passError.value = ''
   try {
-    const u = await store.login(newName.value.trim(), newAvatar.value, newColor.value)
-    if (withPin && newPin.value.length === 4) {
-      await fetch(`${API}/api/users/${u.id}/set-pin`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: newPin.value })
-      })
+    const result = await store.login(selectedUser.value.name, password.value)
+    if (!result.ok && result.needsPasswordSetup) {
+      // Редкий случай гонки: пока смотрели на экран, пароль так и не задали
+      // с другого устройства — просто переключаемся на нужный шаг
+      step.value = 'setpassword'
+      password.value = ''
+      return
     }
     await goHome()
   } catch (e) {
-    createError.value = e?.error || 'Не удалось создать профиль'
-    step.value = 'create'
+    passError.value = e?.error || 'Неверный пароль'
+    password.value = ''
   } finally {
     loading.value = false
   }
 }
 
-// ─── Войти как выбранный пользователь ────────────────────
-async function loginAs(u) {
+// ─── Миграция: задать пароль старому аккаунту ──────────────
+async function submitSetPassword() {
+  if (!canSubmitSetPassword.value || loading.value) return
   loading.value = true
+  passError.value = ''
   try {
-    store.setUser(u)
+    await store.setPassword(selectedUser.value.name, password.value)
     await goHome()
+  } catch (e) {
+    passError.value = e?.error || 'Не удалось задать пароль'
+  } finally {
+    loading.value = false
+  }
+}
+
+// ─── Регистрация нового профиля ────────────────────────────
+async function submitRegister() {
+  if (!canSubmitSetPassword.value || loading.value) return
+  loading.value = true
+  passError.value = ''
+  try {
+    await store.register(newName.value.trim(), password.value, newAvatar.value, newColor.value)
+    await goHome()
+  } catch (e) {
+    passError.value = e?.error || 'Не удалось создать профиль'
   } finally {
     loading.value = false
   }
@@ -357,6 +398,11 @@ h1 { font-size: var(--text-xl); font-weight: 700; margin-bottom: var(--space-1);
   font-size: 1.25rem; flex-shrink: 0;
 }
 .uname { flex: 1; font-weight: 600; font-size: var(--text-sm); }
+.badge-nopass {
+  font-size: 10px; font-weight: 700; color: #e8af34;
+  background: rgba(232,175,52,.15); padding: 2px 7px; border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
 .arrow { color: var(--text-faint); font-size: var(--text-sm); transition: transform var(--transition); }
 .user-btn:hover .arrow { transform: translateX(3px); color: var(--accent); }
 
@@ -378,7 +424,7 @@ h1 { font-size: var(--text-xl); font-weight: 700; margin-bottom: var(--space-1);
 }
 .create-btn:hover { background: var(--accent-soft); }
 
-/* ── PIN ── */
+/* ── Профиль над формой пароля ── */
 .pin-profile {
   display: flex; flex-direction: column; align-items: center; gap: var(--space-2);
   margin-bottom: var(--space-4);
@@ -388,32 +434,6 @@ h1 { font-size: var(--text-xl); font-weight: 700; margin-bottom: var(--space-1);
   display: flex; align-items: center; justify-content: center; font-size: 2rem;
 }
 .pin-name { font-size: var(--text-base); font-weight: 700; }
-
-.pin-dots {
-  display: flex; justify-content: center; gap: var(--space-4);
-  margin: var(--space-4) 0;
-}
-.pin-dot {
-  width: 16px; height: 16px; border-radius: var(--radius-full);
-  border: 2px solid var(--border); background: transparent;
-  transition: all .2s ease;
-}
-.pin-dot.filled { background: var(--accent); border-color: var(--accent); transform: scale(1.15); }
-
-.pin-pad {
-  display: grid; grid-template-columns: repeat(3, 1fr);
-  gap: var(--space-2); margin: 0 auto; max-width: 240px;
-}
-.pin-key {
-  height: 56px; border-radius: var(--radius-lg);
-  font-size: var(--text-lg); font-weight: 600;
-  background: var(--surface-2); border: 1px solid var(--border);
-  display: flex; align-items: center; justify-content: center;
-  transition: all var(--transition); color: var(--text);
-}
-.pin-key:hover:not(.ghost) { background: var(--hover); border-color: var(--accent-line); transform: scale(1.04); }
-.pin-key:active:not(.ghost) { transform: scale(.96); }
-.pin-key.ghost { background: transparent; border-color: transparent; pointer-events: none; }
 
 .pin-error {
   text-align: center; color: #e06c75;
@@ -462,15 +482,6 @@ h1 { font-size: var(--text-xl); font-weight: 700; margin-bottom: var(--space-1);
 }
 .login-btn:hover:not(:disabled) { background: var(--accent-hover); }
 .login-btn:disabled { opacity: .45; cursor: not-allowed; }
-
-.setpin-actions { display: flex; gap: var(--space-3); margin-top: var(--space-2); }
-.skip-btn {
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border); border-radius: var(--radius-lg);
-  font-size: var(--text-sm); font-weight: 600; color: var(--text-muted);
-  transition: all var(--transition); white-space: nowrap;
-}
-.skip-btn:hover { background: var(--hover); color: var(--text); }
 
 .download-link {
   display: block; text-align: center; margin-top: var(--space-5);

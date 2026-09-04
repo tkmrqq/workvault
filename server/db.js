@@ -117,6 +117,14 @@ db.exec(`
     tag_id     INTEGER NOT NULL REFERENCES kanban_tags(id) ON DELETE CASCADE,
     PRIMARY KEY (subtask_id, tag_id)
   );
+
+  CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER DEFAULT (unixepoch())
+  );
 `)
 
 try {
@@ -130,6 +138,13 @@ try {
 try {
   db.prepare("ALTER TABLE users ADD COLUMN banner TEXT DEFAULT 'violet'").run()
 } catch {}
+
+// ─── Auth: пароли + роли ───────────────────────────────────
+// password_hash NULL = старый юзер, ещё не проходил миграцию на пароль —
+// именно по этому признаку логин-флоу решает, показывать "войти" или
+// "задай пароль для существующего имени".
+try { db.prepare('ALTER TABLE users ADD COLUMN password_hash TEXT').run() } catch {}
+try { db.prepare("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'member'").run() } catch {}
 
 // ─── Миграции для существующих БД (добавляем колонки, если их ещё нет) ───
 try { db.prepare('ALTER TABLE kanban_columns ADD COLUMN workspace_id INTEGER REFERENCES kanban_workspaces(id)').run() } catch {}
@@ -159,7 +174,8 @@ function publicUserSelect(where = '') {
       created_at,
       description,
       banner,
-      CASE WHEN pin_hash IS NOT NULL AND pin_hash != '' THEN 1 ELSE 0 END as has_pin
+      role,
+      CASE WHEN password_hash IS NOT NULL AND password_hash != '' THEN 1 ELSE 0 END as has_password
     FROM users
     ${where}
   `
@@ -178,6 +194,17 @@ function verifyPinHash(pin, stored) {
   const left = Buffer.from(candidate, 'hex')
   const right = Buffer.from(hash, 'hex')
   return left.length === right.length && crypto.timingSafeEqual(left, right)
+}
+
+// Алиасы — тот же PBKDF2-хелпер, что и для старого PIN, переиспользуем для
+// паролей (алгоритм не завязан на длину/формат секрета, менять нечего).
+const hashSecret = hashPin
+const verifySecretHash = verifyPinHash
+
+function hashToken(token) {
+  // Refresh-токены в БД храним только хэшем (SHA-256 достаточно — это не
+  // пароль человека, а уже случайная строка высокой энтропии из crypto.randomBytes)
+  return crypto.createHash('sha256').update(token).digest('hex')
 }
 
 // ─── СИДЫ ────────────────────────────────────────────────
@@ -288,16 +315,46 @@ module.exports = {
 
   getUserByName: (name) => db.prepare(publicUserSelect('WHERE name = ?')).get(name),
 
-  createUser: (name, avatar, color) =>
-    db.prepare('INSERT INTO users (name, avatar, color) VALUES (?,?,?)').run(name, avatar, color),
+  createUser: (name, avatar, color, password) =>
+    db.prepare('INSERT INTO users (name, avatar, color, password_hash) VALUES (?,?,?,?)')
+      .run(name, avatar, color, password ? hashSecret(password) : null),
 
-  setUserPin: (id, pin) =>
-    db.prepare('UPDATE users SET pin_hash = ? WHERE id = ?').run(hashPin(pin), id),
+  // Возвращает id + password_hash + role — то, чего нет в publicUserSelect()
+  // (пароль никогда не должен утечь в обычный /api/users)
+  getUserAuthByName: (name) =>
+    db.prepare('SELECT id, name, password_hash, role FROM users WHERE name = ?').get(name),
 
-  verifyUserPin: (id, pin) => {
-    const row = db.prepare('SELECT pin_hash FROM users WHERE id = ?').get(id)
-    return verifyPinHash(pin, row?.pin_hash)
+  setUserPassword: (id, password) =>
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashSecret(password), id),
+
+  verifyUserPassword: (id, password) => {
+    const row = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(id)
+    return verifySecretHash(password, row?.password_hash)
   },
+
+  setUserRole: (id, role) =>
+    db.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, id),
+
+  // ── Refresh-токены ────────────────────────────────────────
+  storeRefreshToken: (userId, token, expiresAtMs) =>
+    db.prepare('INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?,?,?)')
+      .run(userId, hashToken(token), Math.floor(expiresAtMs / 1000)),
+
+  findRefreshToken: (token) => {
+    const row = db.prepare('SELECT * FROM refresh_tokens WHERE token_hash = ?').get(hashToken(token))
+    if (!row) return null
+    if (row.expires_at < Math.floor(Date.now() / 1000)) {
+      db.prepare('DELETE FROM refresh_tokens WHERE id = ?').run(row.id) // просрочен — сразу подчищаем
+      return null
+    }
+    return row
+  },
+
+  deleteRefreshToken: (token) =>
+    db.prepare('DELETE FROM refresh_tokens WHERE token_hash = ?').run(hashToken(token)),
+
+  deleteAllRefreshTokensForUser: (userId) =>
+    db.prepare('DELETE FROM refresh_tokens WHERE user_id = ?').run(userId),
 
   getFolders: () => {
     const folders = db.prepare('SELECT * FROM folders ORDER BY sort').all()
