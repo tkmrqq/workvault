@@ -846,13 +846,13 @@ onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseu
   position: absolute; top: 8px; right: 8px;
   width: 18px; height: 18px; display: flex; align-items: center; justify-content: center;
   color: var(--text-faint); cursor: grab;
-  opacity: 0; transition: opacity var(--transition), color var(--transition);
+  opacity: 0; pointer-events: none; transition: opacity var(--transition), color var(--transition);
 }
-.kanban-card:hover .card-drag-handle { opacity: 1; }
+.kanban-card:hover .card-drag-handle { opacity: 1; pointer-events: auto; }
 .card-drag-handle:hover { color: var(--accent); }
 .card-drag-handle:active { cursor: grabbing; }
 @media (hover: none) {
-  .card-drag-handle { opacity: 1; } /* тач-устройства: hover ненадёжен, держим ручку видимой всегда */
+  .card-drag-handle { opacity: 1; pointer-events: auto; } /* тач-устройства: hover ненадёжен, держим ручку видимой всегда */
 }
 
 .card-top-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 6px; }
@@ -948,6 +948,7 @@ onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseu
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   width: min(480px, 100%);
+  max-height: 90vh;
   box-shadow: var(--shadow-lg);
   display: flex; flex-direction: column;
   opacity: 0; transform: scale(.96) translateY(8px);
@@ -980,7 +981,7 @@ onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseu
   transition: all var(--transition);
 }
 .modal-close:hover { background: var(--hover); color: var(--text); }
-.modal-body { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+.modal-body { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; overflow-x: hidden; min-height: 0; min-width: 0; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .field-group { display: flex; flex-direction: column; }
 .modal-footer {

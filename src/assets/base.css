@@ -236,7 +236,8 @@ a:hover {
 .markdown-body {
   line-height: 1.55;
   color: var(--text);
-  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .markdown-body>*:first-child {
@@ -399,4 +400,28 @@ a:hover {
   min-height: 80px;
   max-height: 60vh;
   /* тянется вниз, не вправо; не растёт бесконечно */
+}
+
+/* iOS Safari risuet nativnuyu strelku u <select> tyomnym sistemnym tsvetom
+   nezavisimo ot ostalnoy temizatsii - na tyomnoy teme poluchaetsya chyornaya
+   strelka na tyomnom fone. Ubiraem nativny vid vezde razom i risuem svoyu. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23888888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px !important;
+}
+
+/* iOS Safari zumit stranitsu pri fokuse na pole vvoda, esli ego font-size
+   menshe 16px - imenno eto oschuschaetsya kak "mozhno podvigat gorizontalno"
+   pri redaktirovanii (na samom dele eto zazumlenny viewport, ne overflow). */
+@media (max-width: 860px) {
+
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
 }

@@ -41,9 +41,25 @@
             <!-- View mode -->
             <template v-if="!editMode">
               <h1 class="card-page-title">{{ card.title }}</h1>
-              <div v-if="card.description" class="card-page-desc markdown-body" v-html="renderMarkdown(card.description)"></div>
+              <div v-if="card.description" class="card-page-desc markdown-body compact-mobile" v-html="renderMarkdown(card.description)"></div>
+              <button v-if="card.description" type="button" class="desc-expand-hint mobile-only" @click="descFullscreen = true">Читать целиком</button>
               <p v-else class="card-page-desc empty">Нет описания</p>
             </template>
+
+            <!-- Полноэкранное чтение описания карточки на мобилке -->
+            <Teleport to="body">
+              <div v-if="descFullscreen" class="md-fs-overlay">
+                <div class="md-fs-header">
+                  <span class="md-fs-title">{{ card.title }}</span>
+                  <button type="button" class="md-fs-close" @click="descFullscreen = false">
+                    <X :size="18" :stroke-width="2.2" />
+                  </button>
+                </div>
+                <div class="md-fs-body">
+                  <div class="markdown-body md-fs-preview" v-html="renderMarkdown(card.description)"></div>
+                </div>
+              </div>
+            </Teleport>
 
             <!-- Edit mode -->
             <template v-else>
@@ -380,6 +396,7 @@ const card    = ref(null)
 const users   = ref([])
 const columns = ref([])
 const editMode = ref(false)
+const descFullscreen = ref(false)
 const edit = reactive({ title: '', description: '', priority: 'medium', assignee_id: null, column_id: null, due_date: '' })
 
 // ─── Subtask columns ──────────────────────────────────────
@@ -859,6 +876,47 @@ onUnmounted(() => {
 
 .card-page-title { font-size: var(--text-xl); font-weight: 700; line-height: 1.3; }
 .card-page-desc { font-size: var(--text-sm); color: var(--text-muted); line-height: 1.6; white-space: pre-wrap; }
+
+.mobile-only { display: none; }
+.desc-expand-hint {
+  display: none;
+  width: 100%; margin-top: 6px; padding: 6px;
+  font-size: var(--text-xs); font-weight: 600; color: var(--accent);
+  text-align: center; border-radius: var(--radius-md);
+  transition: background var(--transition);
+}
+.desc-expand-hint:hover { background: var(--accent-soft); }
+
+@media (max-width: 860px) {
+  .mobile-only { display: flex; }
+  .desc-expand-hint { display: block; }
+  .card-page-desc.compact-mobile {
+    max-height: 160px; overflow: hidden; position: relative;
+  }
+  .card-page-desc.compact-mobile::after {
+    content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 36px;
+    background: linear-gradient(to bottom, transparent, var(--surface));
+    pointer-events: none;
+  }
+}
+
+.md-fs-overlay {
+  position: fixed; inset: 0; z-index: 3500;
+  background: var(--surface);
+  display: flex; flex-direction: column;
+}
+.md-fs-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.md-fs-title { font-size: var(--text-sm); font-weight: 700; }
+.md-fs-close {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: var(--radius-md); color: var(--text-muted); flex-shrink: 0;
+}
+.md-fs-close:hover { background: var(--hover); color: var(--text); }
+.md-fs-body { flex: 1; overflow-y: auto; padding: 14px 16px; min-height: 0; }
+.md-fs-preview { font-size: var(--text-base); }
 .card-page-desc.empty { color: var(--text-faint); font-style: italic; }
 
 /* Edit form */
@@ -1005,13 +1063,13 @@ onUnmounted(() => {
   position: absolute; top: 6px; right: 6px;
   width: 15px; height: 15px; display: flex; align-items: center; justify-content: center;
   color: var(--text-faint); cursor: grab;
-  opacity: 0; transition: opacity var(--transition), color var(--transition);
+  opacity: 0; pointer-events: none; transition: opacity var(--transition), color var(--transition);
 }
-.sub-card:hover .sub-card-drag-handle { opacity: 1; }
+.sub-card:hover .sub-card-drag-handle { opacity: 1; pointer-events: auto; }
 .sub-card-drag-handle:hover { color: var(--accent); }
 .sub-card-drag-handle:active { cursor: grabbing; }
 @media (hover: none) {
-  .sub-card-drag-handle { opacity: 1; }
+  .sub-card-drag-handle { opacity: 1; pointer-events: auto; }
 }
 .sub-card-priority {
   font-size: 9px; font-weight: 700; padding: 1px 6px;
@@ -1089,6 +1147,7 @@ onUnmounted(() => {
 .modal {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius-xl); width: min(460px, 100%);
+  max-height: 90vh; /* иначе большое описание раздувало модалку выше экрана без возможности проскроллить */
   box-shadow: var(--shadow-lg); display: flex; flex-direction: column;
   animation: modalIn .2s ease forwards;
 }
@@ -1114,7 +1173,7 @@ onUnmounted(() => {
   transition: all var(--transition);
 }
 .modal-close:hover { background: var(--hover); color: var(--text); }
-.modal-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+.modal-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; overflow-x: hidden; min-height: 0; min-width: 0; }
 .modal-footer {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 20px 16px; border-top: 1px solid var(--border);

@@ -193,10 +193,6 @@ async function save() {
     })
     const updated = await res.json()
     store.user = updated
-    localStorage.setItem('wv-user', JSON.stringify(updated))
-    const known = JSON.parse(localStorage.getItem('wv-known-users') || '[]')
-    const idx = known.findIndex(u => u.id === updated.id)
-    if (idx !== -1) { known[idx] = updated; localStorage.setItem('wv-known-users', JSON.stringify(known)) }
     emit('updated', updated)
     emit('close')
   } finally {
@@ -204,15 +200,15 @@ async function save() {
   }
 }
 
-function switchAccount() {
-  store.logout()
+async function switchAccount() {
+  await store.logout()
   emit('close')
   router.push('/')
 }
 
 async function logout() {
   if (!await confirmDialog('Выйти из аккаунта?')) return
-  store.logout()
+  await store.logout()
   emit('close')
   router.push('/')
 }
