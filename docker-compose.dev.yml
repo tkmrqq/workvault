@@ -1,0 +1,14 @@
+# Локальная разработка — собирает образ из текущего кода на месте,
+# вместо pull'а прод-образа из GHCR. Не auto-merge'ится сам (в отличие
+# от docker-compose.override.yml) — подключается явно через -f, поэтому
+# даже если этот файл попадёт в гит и долетит до сервера через
+# git reset --hard, на прод-деплой он никак не влияет: deploy.sh его
+# просто не знает и не подключает.
+services:
+  workvault:
+    image: workvault:dev   # свой тег — чтобы не путать с прод-тегом latest
+    build: .
+    ports:
+      - "3000:3000"
+
+# docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build workvault

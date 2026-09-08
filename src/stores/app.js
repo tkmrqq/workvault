@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { io } from 'socket.io-client'
+import { installAuthFetch } from '@/lib/authFetch'
 
 const BASE = window.electronAPI?.serverUrl || ''
 
@@ -14,7 +15,11 @@ const API = import.meta.env.VITE_API_URL || ''
 
 export const useAppStore = defineStore('app', () => {
   // ── State ──────────────────────────────────────────────
-  const user        = ref(JSON.parse(localStorage.getItem('wv-user') || 'null'))
+  // user больше не хранится в localStorage — источник правды теперь
+  // httpOnly-кука на сервере (JS её даже прочитать не может). При старте
+  // приложения сессию восстанавливаем через checkSession() → GET /api/auth/me.
+  const user          = ref(null)
+  const sessionChecked = ref(false) // true после первой проверки — используется роут-гардом
   const theme       = ref(localStorage.getItem('wv-theme') || 'dark')
   const folders     = ref([])
   const activeChId  = ref(null)
@@ -26,6 +31,14 @@ export const useAppStore = defineStore('app', () => {
   const attachmentFilters = ref(JSON.parse(localStorage.getItem('wv-attach-filters') || '{}'))
   let socket        = null
   let typingTimeout = null
+  let refreshTimer  = null
+
+  installAuthFetch(API, () => {
+    // Refresh не удался — сессия реально мертва (истёк refresh-токен,
+    // logout с другого устройства и т.п.). Тихо разлогиниваем на фронте,
+    // роут-гард сам уведёт на /, как только увидит user === null.
+    if (user.value) logout()
+  })
 
   // ── Computed ───────────────────────────────────────────
   const allChannels    = computed(() => folders.value.flatMap(f => f.channels || []))
@@ -67,34 +80,90 @@ export const useAppStore = defineStore('app', () => {
   // Применяем тему при старте
   applyTheme(theme.value)
 
-  // ── Users ──────────────────────────────────────────────
+  // ── Auth ───────────────────────────────────────────────
   async function fetchUsers() {
     const res = await fetch(`${API}/api/users`)
     return res.json()
   }
 
-  async function login(name, avatar, color) {
-    const res = await fetch(`${API}/api/users`, {
-      method:  'POST',
+  // Проверяем текущую сессию по httpOnly-куке — вызывается один раз при
+  // старте приложения (main.js, перед первым рендером роутов)
+  async function checkSession() {
+    try {
+      const res = await fetch(`${API}/api/auth/me`, { credentials: 'include' })
+      if (res.ok) {
+        user.value = await res.json()
+        _afterLogin()
+      }
+    } catch {}
+    sessionChecked.value = true
+  }
+
+  async function register(name, password, avatar, color) {
+    const res = await fetch(`${API}/api/auth/register`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ name, avatar, color })
+      credentials: 'include',
+      body: JSON.stringify({ name, password, avatar, color })
     })
-    if (!res.ok) throw await res.json()
-    const u = await res.json()
-    setUser(u)
-    return u
+    const data = await res.json()
+    if (!res.ok) throw data
+    user.value = data
+    _afterLogin()
+    return data
   }
 
-  function setUser(u) {
-    user.value = u
-    localStorage.setItem('wv-user', JSON.stringify(u))
+  // Возвращает { ok: true, user } либо { ok: false, needsPasswordSetup: true }
+  // для старых аккаунтов без пароля — бросает только на реальную ошибку
+  // (неверный пароль, rate limit и т.п.)
+  async function login(name, password) {
+    const res = await fetch(`${API}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ name, password })
+    })
+    const data = await res.json()
+    if (!res.ok) {
+      if (data.code === 'NEEDS_PASSWORD_SETUP') return { ok: false, needsPasswordSetup: true }
+      throw data
+    }
+    user.value = data
+    _afterLogin()
+    return { ok: true, user: data }
+  }
+
+  async function setPassword(name, password) {
+    const res = await fetch(`${API}/api/auth/set-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ name, password })
+    })
+    const data = await res.json()
+    if (!res.ok) throw data
+    user.value = data
+    _afterLogin()
+    return data
+  }
+
+  function _afterLogin() {
     initSocket()
-    return u
+    // Access-токен живёт 15 мин — обновляем каждые 10, чтобы сессия не
+    // рвалась посреди работы; 401-retry в authFetch — подстраховка
+    // на случай, если запрос всё же попал в узкое окно между обновлениями
+    clearInterval(refreshTimer)
+    refreshTimer = setInterval(() => {
+      fetch(`${API}/api/auth/refresh`, { method: 'POST', credentials: 'include' }).catch(() => {})
+    }, 10 * 60 * 1000)
   }
 
-  function logout() {
+  async function logout() {
+    try {
+      await fetch(`${API}/api/auth/logout`, { method: 'POST', credentials: 'include' })
+    } catch {}
     user.value = null
-    localStorage.removeItem('wv-user')
+    clearInterval(refreshTimer)
     socket?.disconnect()
     socket = null
   }
@@ -105,16 +174,21 @@ export const useAppStore = defineStore('app', () => {
 
     socket = io(API || window.location.origin, {
       path: '/socket.io',
-      transports: ['websocket', 'polling']
+      transports: ['websocket', 'polling'],
+      withCredentials: true // личность теперь проверяется по httpOnly-куке на хендшейке, не по emit('auth', ...)
     })
 
     socket.on('connect', () => {
-      if (user.value) {
-        socket.emit('auth', { userId: user.value.id })
-        if (activeChId.value) {
-          socket.emit('channel:join', { channelId: activeChId.value })
-        }
+      if (activeChId.value) {
+        socket.emit('channel:join', { channelId: activeChId.value })
       }
+    })
+
+    socket.on('connect_error', (err) => {
+      // Хендшейк отклонён (протухшая кука) — ничего специально не делаем,
+      // socket.io сам ретраит с backoff, а очередная попытка подхватит
+      // уже свежую куку после ближайшего фонового refresh (см. _afterLogin)
+      if (err.message === 'unauthorized') console.warn('Socket: сессия истекла, жду обновления токена...')
     })
 
     socket.on('online:update', list => { onlineList.value = list })
@@ -220,7 +294,6 @@ export const useAppStore = defineStore('app', () => {
     if (!activeChId.value || !user.value) return
     socket?.emit('message:send', {
       channelId:  activeChId.value,
-      userId:     user.value.id,
       text:       text || null,
       attachment: attachment || null,
       linkMeta:   linkMeta || null
@@ -246,7 +319,6 @@ export const useAppStore = defineStore('app', () => {
   function editMessage(messageId, text) {
     socket?.emit('message:edit', {
       messageId,
-      userId:    user.value?.id,
       text,
       channelId: activeChId.value
     })
@@ -255,7 +327,6 @@ export const useAppStore = defineStore('app', () => {
   function deleteMessage(messageId) {
     socket?.emit('message:delete', {
       messageId,
-      userId:    user.value?.id,
       channelId: activeChId.value
     })
   }
@@ -263,7 +334,6 @@ export const useAppStore = defineStore('app', () => {
   function toggleReaction(messageId, emoji) {
     socket?.emit('reaction:toggle', {
       messageId,
-      userId:    user.value?.id,
       emoji,
       channelId: activeChId.value
     })
@@ -273,21 +343,21 @@ export const useAppStore = defineStore('app', () => {
 
   function sendTyping() {
     if (!activeChId.value || !user.value) return
-    socket?.emit('typing:start', { channelId: activeChId.value, userName: user.value.name })
+    socket?.emit('typing:start', { channelId: activeChId.value })
     clearTimeout(typingTimeout)
     typingTimeout = setTimeout(() => {
-      socket?.emit('typing:stop', { channelId: activeChId.value, userName: user.value.name })
+      socket?.emit('typing:stop', { channelId: activeChId.value })
     }, 2000)
   }
 
-  // Восстанавливаем сокет если юзер уже залогинен
-  if (user.value) initSocket()
+  // Сессию восстанавливаем через checkSession() из main.js (роут-гард ждёт
+  // sessionChecked), а не сразу здесь — иначе будет гонка с установкой роутов
 
   return {
-    user, theme, folders, activeChId, activeChannel, allChannels,
+    user, sessionChecked, theme, folders, activeChId, activeChannel, allChannels,
     activeMessages, filteredActiveMessages, activeAttachmentFilter, setAttachmentFilter,
     hasMore, onlineList, typingNames,
-    fetchUsers, login, setUser, logout, toggleTheme, getSocket,
+    fetchUsers, checkSession, register, login, setPassword, logout, toggleTheme, getSocket,
     fetchFolders, setChannel, loadMore,
     sendMessage, uploadFile, unfurlUrl,
     editMessage, deleteMessage, toggleReaction, sendTyping

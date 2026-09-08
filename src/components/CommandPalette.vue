@@ -61,7 +61,7 @@ const staticCommands = computed(() => [
   { id: 'theme', label: store.theme === 'dark' ? 'Светлая тема' : 'Тёмная тема', icon: store.theme === 'dark' ? Sun : Moon, run: () => store.toggleTheme() },
   {
     id: 'logout', label: 'Выйти из аккаунта', icon: LogOut,
-    run: async () => { if (await confirmDialog('Выйти из аккаунта?')) { store.logout(); router.push('/') } }
+    run: async () => { if (await confirmDialog('Выйти из аккаунта?')) { await store.logout(); router.push('/') } }
   }
 ])
 

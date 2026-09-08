@@ -1,8 +1,6 @@
 services:
   workvault:
     image: ghcr.io/tkmrqq/workvault:latest
-    ports:
-      - "3000:3000"
     volumes:
       - ./data:/app/data          # SQLite + uploads — персистентность
     restart: unless-stopped
@@ -19,12 +17,25 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
-  
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+      - ./data/uploads:/data/uploads:ro
+    depends_on:
+      - workvault
+    restart: unless-stopped
+
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:latest
     container_name: cadvisor
     ports:
-      - "0.0.0.0:8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:rw
@@ -35,12 +46,12 @@ services:
       - /dev/kmsg
     privileged: true
     restart: unless-stopped
-  
+
   blackbox:
     image: prom/blackbox-exporter:latest
     container_name: blackbox
     ports:
-      - "9115:9115"
+      - "127.0.0.1:9115:9115"
     volumes:
       - ./blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
     restart: unless-stopped

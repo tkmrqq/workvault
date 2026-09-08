@@ -32,7 +32,7 @@ jobs:
         env:
           APP_PUBLIC_URL: ${{ secrets.APP_PUBLIC_URL }}
         run: |
-          echo "VITE_API_URL=http://${APP_PUBLIC_URL}" > .env.production
+          echo "VITE_API_URL=${APP_PUBLIC_URL}" > .env.production
 
       - name: Install dependencies
         run: npm ci
@@ -64,7 +64,7 @@ jobs:
         env:
           APP_PUBLIC_URL: ${{ secrets.APP_PUBLIC_URL }}
         run: |
-          echo "VITE_API_URL=http://${APP_PUBLIC_URL}" > .env.production
+          echo "VITE_API_URL=${APP_PUBLIC_URL}" > .env.production
       
       - name: Install dependencies
         run: npm ci

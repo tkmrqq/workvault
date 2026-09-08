@@ -2,23 +2,34 @@ const express = require('express')
 const http = require('http')
 const { Server } = require('socket.io')
 const cors = require('cors')
+const cookieParser = require('cookie-parser')
+const cookie = require('cookie')
 const multer = require('multer')
 const path = require('path')
 const fs = require('fs')
 const ogs = require('open-graph-scraper')
 
 const config = require('./config')
-
 const db = require('./db')
+const {
+  requireAuth, requireAdmin, verifyAccessToken,
+  setAuthCookies, clearAuthCookies, issueRefreshToken, signAccessToken,
+  loginRateLimit, registerFailedLogin, clearFailedLogins
+} = require('./auth')
 
 const app = express()
 const server = http.createServer(app)
 const io = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST'] }
+  cors: { origin: '*', methods: ['GET', 'POST'], credentials: true }
 })
 
-app.use(cors())
+// За nginx — без этого req.ip показывал бы IP самого nginx-контейнера для
+// всех запросов разом, а не реального клиента (важно для rate-limit на логин)
+app.set('trust proxy', 1)
+
+app.use(cors({ origin: true, credentials: true }))
 app.use(express.json())
+app.use(cookieParser())
 
 // ─── UPLOADS ─────────────────────────────────────────────
 const UPLOADS_DIR = config.UPLOADS_DIR
@@ -95,42 +106,124 @@ app.get('/api/latest-release', (_, res) => {
 
 app.get('/api/users', (_, res) => res.json(db.getUsers()))
 
-app.post('/api/users', (req, res, next) => {
-  const { name, avatar, color } = req.body
+// ─── AUTH ───────────────────────────────────────────────────
+// Публичные роуты — регистрация нового имени, вход, миграция старых
+// беспарольных аккаунтов, refresh/logout. Всё, что ниже requireAuth
+// (см. app.use('/api', requireAuth) чуть дальше) — уже защищено.
+
+app.post('/api/auth/register', (req, res, next) => {
+  const { name, password, avatar, color } = req.body
   if (!name?.trim()) return res.status(400).json({ error: 'Имя обязательно' })
-
-  const normalizedName = name.trim()
-  const existing = db.getUserByName(normalizedName)
-  if (existing) {
-    return res.status(409).json({ error: 'Пользователь с таким именем уже есть', user: existing })
+  if (!password || String(password).length < 6) {
+    return res.status(400).json({ error: 'Пароль должен быть не короче 6 символов' })
   }
-
+  const normalizedName = name.trim()
+  if (db.getUserByName(normalizedName)) {
+    return res.status(409).json({ error: 'Это имя уже занято' })
+  }
   try {
-    const result = db.createUser(normalizedName, avatar || '🧑', color || '#7c6af7')
-    res.json(db.getUserById(result.lastInsertRowid))
+    const result = db.createUser(normalizedName, avatar || '🧑', color || '#7c6af7', password)
+    const user = db.getUserById(result.lastInsertRowid)
+    setAuthCookies(res, user)
+    res.json(user)
   } catch (e) {
     if (String(e.message || '').includes('UNIQUE')) {
-      return res.status(409).json({ error: 'Пользователь с таким именем уже есть' })
+      return res.status(409).json({ error: 'Это имя уже занято' })
     }
     next(e)
   }
 })
 
-app.post('/api/users/:id/set-pin', (req, res) => {
-  const { pin } = req.body
-  if (!/^\d{4}$/.test(String(pin || ''))) {
-    return res.status(400).json({ error: 'PIN должен состоять из 4 цифр' })
+app.post('/api/auth/login', loginRateLimit, (req, res) => {
+  const { name, password } = req.body
+  const auth = db.getUserAuthByName((name || '').trim())
+  if (!auth) {
+    registerFailedLogin(req)
+    return res.status(401).json({ error: 'Неверное имя или пароль' })
   }
-  const result = db.setUserPin(req.params.id, pin)
-  if (!result.changes) return res.status(404).json({ error: 'Не найдено' })
+  // Старый юзер без пароля (мигрировал из PIN-системы или создан до неё) —
+  // это не "неверный пароль", а отдельный флоу: фронт должен показать
+  // "задай пароль", а не "войти"
+  if (!auth.password_hash) {
+    return res.status(409).json({ error: 'Для этого имени ещё не задан пароль', code: 'NEEDS_PASSWORD_SETUP' })
+  }
+  if (!db.verifyUserPassword(auth.id, password || '')) {
+    registerFailedLogin(req)
+    return res.status(401).json({ error: 'Неверное имя или пароль' })
+  }
+  clearFailedLogins(req)
+  const user = db.getUserById(auth.id)
+  setAuthCookies(res, user)
+  res.json(user)
+})
+
+// Миграция: существующее (беспарольное) имя получает пароль первым, кто его
+// задаст. Слабое место — тут нет более сильного доказательства "это тот же
+// человек", кроме знания точного имени (ровно тот же риск, что был раньше
+// у обычного создания юзера без пароля вообще). Ужесточать стоит отдельно
+// (например, звать админа подтвердить) — сейчас это просто перекрывает
+// самый частый случай "мы обновились, всем нужны пароли".
+app.post('/api/auth/set-password', loginRateLimit, (req, res) => {
+  const { name, password } = req.body
+  if (!password || String(password).length < 6) {
+    return res.status(400).json({ error: 'Пароль должен быть не короче 6 символов' })
+  }
+  const auth = db.getUserAuthByName((name || '').trim())
+  if (!auth) return res.status(404).json({ error: 'Пользователь не найден' })
+  if (auth.password_hash) {
+    return res.status(409).json({ error: 'У этого аккаунта уже есть пароль — используй вход' })
+  }
+  db.setUserPassword(auth.id, password)
+  clearFailedLogins(req)
+  const user = db.getUserById(auth.id)
+  setAuthCookies(res, user)
+  res.json(user)
+})
+
+app.post('/api/auth/refresh', (req, res) => {
+  const token = req.cookies?.refresh_token
+  const stored = token && db.findRefreshToken(token)
+  if (!stored) return res.status(401).json({ error: 'Сессия истекла, войди заново' })
+  // Ротация: старый refresh сразу гасим, выдаём новую пару — если этот
+  // токен когда-нибудь всплывёт повторно (украден и переигран), findRefreshToken
+  // его уже не найдёт и вернёт 401, что как минимум заметно на фронте
+  db.deleteRefreshToken(token)
+  const user = db.getUserById(stored.user_id)
+  if (!user) { clearAuthCookies(res); return res.status(401).json({ error: 'Пользователь не найден' }) }
+  setAuthCookies(res, user)
+  res.json(user)
+})
+
+app.post('/api/auth/logout', (req, res) => {
+  const token = req.cookies?.refresh_token
+  if (token) db.deleteRefreshToken(token)
+  clearAuthCookies(res)
   res.json({ ok: true })
 })
 
-app.post('/api/users/:id/verify-pin', (req, res) => {
-  const { pin } = req.body
-  if (!/^\d{4}$/.test(String(pin || ''))) return res.json({ ok: false })
-  res.json({ ok: db.verifyUserPin(req.params.id, pin) })
+app.get('/api/auth/me', requireAuth, (req, res) => {
+  const user = db.getUserById(req.user.id)
+  if (!user) return res.status(404).json({ error: 'Не найден' })
+  res.json(user)
 })
+
+// Одноразовый бутстрап первого админа: пока ни у кого нет role='admin',
+// любой залогиненный (с паролем) может назначить себя, назвав ADMIN_PASSWORD
+// из .env. После первого использования — считай это разовым мастер-ключом,
+// имеет смысл сменить/убрать ADMIN_PASSWORD, дальше роли выдаются из /admin.
+app.post('/api/auth/bootstrap-admin', requireAuth, (req, res) => {
+  if (!config.ADMIN_PASSWORD) {
+    return res.status(503).json({ error: 'ADMIN_PASSWORD не задан в .env — бутстрап недоступен' })
+  }
+  if (req.body.master_password !== config.ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Неверный мастер-пароль' })
+  }
+  db.setUserRole(req.user.id, 'admin')
+  res.json({ ok: true })
+})
+
+// ── Всё, что ниже — уже требует валидной сессии ─────────────
+app.use('/api', requireAuth)
 
 app.get('/api/folders', (_, res) => res.json(db.getFolders()))
 
@@ -344,17 +437,29 @@ app.delete('/api/kanban/subtasks/:id/tags/:tagId', (req, res) => {
 })
 
 // ─── SOCKET.IO ────────────────────────────────────────────
+// Раньше клиент сам присылал userId в socket.emit('auth', {userId}) —
+// можно было представиться кем угодно. Теперь личность проверяется по
+// тому же access-cookie, что и обычные HTTP-запросы, прямо на хендшейке —
+// клиенту вообще не нужно ничего слать, cookie летит автоматически.
+io.use((socket, next) => {
+  try {
+    const cookies = cookie.parse(socket.handshake.headers.cookie || '')
+    const payload = cookies.access_token && verifyAccessToken(cookies.access_token)
+    if (!payload) return next(new Error('unauthorized'))
+    socket.user = { id: payload.sub, name: payload.name, role: payload.role }
+    next()
+  } catch (e) {
+    next(new Error('unauthorized'))
+  }
+})
+
 const onlineUsers = new Map() // socketId → { userId, userName, channelId }
 
 io.on('connection', (socket) => {
-  console.log('connect', socket.id)
+  console.log('connect', socket.id, socket.user.name)
 
-  socket.on('auth', ({ userId }) => {
-    const user = db.getUserById(userId)
-    if (!user) return socket.emit('error', 'Пользователь не найден')
-    onlineUsers.set(socket.id, { userId, userName: user.name, channelId: null })
-    io.emit('online:update', getOnlineList())
-  })
+  onlineUsers.set(socket.id, { userId: socket.user.id, userName: socket.user.name, channelId: null })
+  io.emit('online:update', getOnlineList())
 
   socket.on('channel:join', ({ channelId }) => {
     const prev = onlineUsers.get(socket.id)
@@ -370,11 +475,13 @@ io.on('connection', (socket) => {
   // ─ Новое сообщение ──────────────────────────────────────
   // attachment и linkMeta приходят с фронта уже как объекты —
   // в БД пишем через JSON.stringify, из БД читаем через getMessages (парсит сам)
-  socket.on('message:send', ({ channelId, userId, text, attachment, linkMeta }) => {
+  // userId больше не берём из тела события — только из проверенного socket.user,
+  // иначе любой клиент мог отправить сообщение "от имени" произвольного userId.
+  socket.on('message:send', ({ channelId, text, attachment, linkMeta }) => {
     try {
       const type = attachment ? (attachment.isImage ? 'image' : 'file') : 'text'
       const result = db.createMessage(
-        channelId, userId, text || null, type,
+        channelId, socket.user.id, text || null, type,
         attachment ? JSON.stringify(attachment) : null,
         linkMeta   ? JSON.stringify(linkMeta)   : null
       )
@@ -389,27 +496,27 @@ io.on('connection', (socket) => {
     }
   })
 
-  socket.on('message:edit', ({ messageId, userId, text, channelId }) => {
-    db.editMessage(messageId, text, userId)
+  socket.on('message:edit', ({ messageId, text, channelId }) => {
+    db.editMessage(messageId, text, socket.user.id) // WHERE user_id=? в самом запросе — чужое не отредактирует
     io.to(`channel:${channelId}`).emit('message:edited', { messageId, text })
   })
 
-  socket.on('message:delete', ({ messageId, userId, channelId }) => {
-    db.deleteMessage(messageId, userId)
+  socket.on('message:delete', ({ messageId, channelId }) => {
+    db.deleteMessage(messageId, socket.user.id) // та же защита на уровне SQL
     io.to(`channel:${channelId}`).emit('message:deleted', { messageId })
   })
 
-  socket.on('reaction:toggle', ({ messageId, userId, emoji, channelId }) => {
-    db.toggleReaction(messageId, userId, emoji)
+  socket.on('reaction:toggle', ({ messageId, emoji, channelId }) => {
+    db.toggleReaction(messageId, socket.user.id, emoji)
     const reactions = db.getReactions(messageId)
     io.to(`channel:${channelId}`).emit('reaction:update', { messageId, reactions })
   })
 
-  socket.on('typing:start', ({ channelId, userName }) => {
-    socket.to(`channel:${channelId}`).emit('typing:update', { userName, typing: true })
+  socket.on('typing:start', ({ channelId }) => {
+    socket.to(`channel:${channelId}`).emit('typing:update', { userName: socket.user.name, typing: true })
   })
-  socket.on('typing:stop', ({ channelId, userName }) => {
-    socket.to(`channel:${channelId}`).emit('typing:update', { userName, typing: false })
+  socket.on('typing:stop', ({ channelId }) => {
+    socket.to(`channel:${channelId}`).emit('typing:update', { userName: socket.user.name, typing: false })
   })
 
   socket.on('disconnect', () => {
@@ -432,6 +539,12 @@ function getOnlineList() {
 
 // ─── PROFILE ──────────────────────────────────────────────
 app.patch('/api/users/:id', (req, res) => {
+  // Раньше тут не проверялось вообще ничего — залогиненный юзер мог
+  // поправить чужой профиль, просто зная чужой id. Разрешаем только себя
+  // (или админа — мало ли понадобится поправить чей-то профиль руками).
+  if (Number(req.params.id) !== req.user.id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Можно редактировать только свой профиль' })
+  }
   const { name, avatar, color, description, banner } = req.body
   try {
     db.db.prepare(`

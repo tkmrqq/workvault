@@ -117,27 +117,48 @@ db.exec(`
     tag_id     INTEGER NOT NULL REFERENCES kanban_tags(id) ON DELETE CASCADE,
     PRIMARY KEY (subtask_id, tag_id)
   );
+
+  CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER DEFAULT (unixepoch())
+  );
 `)
 
 try {
   db.prepare('ALTER TABLE users ADD COLUMN pin_hash TEXT').run()
-} catch {}
+} catch { }
 
 try {
   db.prepare('ALTER TABLE users ADD COLUMN description TEXT').run()
-} catch {}
+} catch { }
 
 try {
   db.prepare("ALTER TABLE users ADD COLUMN banner TEXT DEFAULT 'violet'").run()
-} catch {}
+} catch { }
+
+// ─── Auth: пароли + роли ───────────────────────────────────
+// password_hash NULL = старый юзер, ещё не проходил миграцию на пароль —
+// именно по этому признаку логин-флоу решает, показывать "войти" или
+// "задай пароль для существующего имени".
+try { db.prepare('ALTER TABLE users ADD COLUMN password_hash TEXT').run() } catch { }
+try { db.prepare("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'member'").run() } catch { }
+
+// Разовая уборка тегов, успевших осиротеть до того, как появилась
+// автоматическая чистка в removeTagFromSubtask/deleteSubtask
+db.prepare(`
+  DELETE FROM kanban_tags WHERE id NOT IN (SELECT DISTINCT tag_id FROM kanban_subtask_tags)
+`).run()
 
 // ─── Миграции для существующих БД (добавляем колонки, если их ещё нет) ───
-try { db.prepare('ALTER TABLE kanban_columns ADD COLUMN workspace_id INTEGER REFERENCES kanban_workspaces(id)').run() } catch {}
-try { db.prepare('ALTER TABLE kanban_columns ADD COLUMN is_terminal INTEGER NOT NULL DEFAULT 0').run() } catch {}
-try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN due_date INTEGER').run() } catch {}
-try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN done_at INTEGER').run() } catch {}
-try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN archived_at INTEGER').run() } catch {}
-try { db.prepare('ALTER TABLE kanban_subtasks ADD COLUMN description TEXT').run() } catch {}
+try { db.prepare('ALTER TABLE kanban_columns ADD COLUMN workspace_id INTEGER REFERENCES kanban_workspaces(id)').run() } catch { }
+try { db.prepare('ALTER TABLE kanban_columns ADD COLUMN is_terminal INTEGER NOT NULL DEFAULT 0').run() } catch { }
+try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN due_date INTEGER').run() } catch { }
+try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN done_at INTEGER').run() } catch { }
+try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN archived_at INTEGER').run() } catch { }
+try { db.prepare('ALTER TABLE kanban_subtasks ADD COLUMN description TEXT').run() } catch { }
 
 // Дефолтная рабочая зона + привязка "старых" колонок без workspace_id
 const wsCount = db.prepare('SELECT COUNT(*) as c FROM kanban_workspaces').get().c
@@ -159,7 +180,8 @@ function publicUserSelect(where = '') {
       created_at,
       description,
       banner,
-      CASE WHEN pin_hash IS NOT NULL AND pin_hash != '' THEN 1 ELSE 0 END as has_pin
+      role,
+      CASE WHEN password_hash IS NOT NULL AND password_hash != '' THEN 1 ELSE 0 END as has_password
     FROM users
     ${where}
   `
@@ -178,6 +200,17 @@ function verifyPinHash(pin, stored) {
   const left = Buffer.from(candidate, 'hex')
   const right = Buffer.from(hash, 'hex')
   return left.length === right.length && crypto.timingSafeEqual(left, right)
+}
+
+// Алиасы — тот же PBKDF2-хелпер, что и для старого PIN, переиспользуем для
+// паролей (алгоритм не завязан на длину/формат секрета, менять нечего).
+const hashSecret = hashPin
+const verifySecretHash = verifyPinHash
+
+function hashToken(token) {
+  // Refresh-токены в БД храним только хэшем (SHA-256 достаточно — это не
+  // пароль человека, а уже случайная строка высокой энтропии из crypto.randomBytes)
+  return crypto.createHash('sha256').update(token).digest('hex')
 }
 
 // ─── СИДЫ ────────────────────────────────────────────────
@@ -202,16 +235,16 @@ if (seedFolders.c === 0) {
 const seedKanban = db.prepare('SELECT COUNT(*) as c FROM kanban_columns').get()
 if (seedKanban.c === 0) {
   const wsId = db.prepare('SELECT id FROM kanban_workspaces ORDER BY sort LIMIT 1').get().id
-  db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'To Do',       0, '#61afef', 0)
+  db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'To Do', 0, '#61afef', 0)
   db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'In Progress', 1, '#e8af34', 0)
-  db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'Done',        2, '#4caf7d', 1)
+  db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'Done', 2, '#4caf7d', 1)
 }
 
 const ARCHIVE_AFTER_MS = config.KANBAN_ARCHIVE_AFTER_DAYS * 86400
 
 // Та же палитра, что и для автоцвета юзеров при регистрации (LoginView.vue) —
 // чтобы теги визуально не выбивались из остального UI.
-const TAG_PALETTE = ['#7c6af7','#4caf7d','#e8956d','#e06c75','#e8af34','#61afef','#c678dd','#56b6c2']
+const TAG_PALETTE = ['#7c6af7', '#4caf7d', '#e8956d', '#e06c75', '#e8af34', '#61afef', '#c678dd', '#56b6c2']
 
 function hashString(str) {
   let h = 0
@@ -225,6 +258,14 @@ function tagsForSubtask(subtask_id) {
     JOIN kanban_subtask_tags st ON st.tag_id = t.id
     WHERE st.subtask_id = ? ORDER BY t.name COLLATE NOCASE
   `).all(subtask_id)
+}
+
+// Тег, случайно созданный на лету и тут же отвязанный (или у последней
+// подзадачи, где он был, удалили саму подзадачу) — больше никому не нужен,
+// иначе такие тени копятся в списке автокомплита навсегда.
+function deleteTagIfOrphaned(tag_id) {
+  const { c } = db.prepare('SELECT COUNT(*) as c FROM kanban_subtask_tags WHERE tag_id=?').get(tag_id)
+  if (c === 0) db.prepare('DELETE FROM kanban_tags WHERE id=?').run(tag_id)
 }
 
 function updateFolders(folders) {
@@ -286,18 +327,48 @@ module.exports = {
 
   getUserById: (id) => db.prepare(publicUserSelect('WHERE id = ?')).get(id),
 
-  getUserByName: (name) => db.prepare(publicUserSelect('WHERE name = ?')).get(name),
+  getUserByName: (name) => db.prepare(publicUserSelect('WHERE name = ? COLLATE NOCASE')).get(name),
 
-  createUser: (name, avatar, color) =>
-    db.prepare('INSERT INTO users (name, avatar, color) VALUES (?,?,?)').run(name, avatar, color),
+  createUser: (name, avatar, color, password) =>
+    db.prepare('INSERT INTO users (name, avatar, color, password_hash) VALUES (?,?,?,?)')
+      .run(name, avatar, color, password ? hashSecret(password) : null),
 
-  setUserPin: (id, pin) =>
-    db.prepare('UPDATE users SET pin_hash = ? WHERE id = ?').run(hashPin(pin), id),
+  // Возвращает id + password_hash + role — то, чего нет в publicUserSelect()
+  // (пароль никогда не должен утечь в обычный /api/users)
+  getUserAuthByName: (name) =>
+    db.prepare('SELECT id, name, password_hash, role FROM users WHERE name = ? COLLATE NOCASE').get(name),
 
-  verifyUserPin: (id, pin) => {
-    const row = db.prepare('SELECT pin_hash FROM users WHERE id = ?').get(id)
-    return verifyPinHash(pin, row?.pin_hash)
+  setUserPassword: (id, password) =>
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashSecret(password), id),
+
+  verifyUserPassword: (id, password) => {
+    const row = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(id)
+    return verifySecretHash(password, row?.password_hash)
   },
+
+  setUserRole: (id, role) =>
+    db.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, id),
+
+  // ── Refresh-токены ────────────────────────────────────────
+  storeRefreshToken: (userId, token, expiresAtMs) =>
+    db.prepare('INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?,?,?)')
+      .run(userId, hashToken(token), Math.floor(expiresAtMs / 1000)),
+
+  findRefreshToken: (token) => {
+    const row = db.prepare('SELECT * FROM refresh_tokens WHERE token_hash = ?').get(hashToken(token))
+    if (!row) return null
+    if (row.expires_at < Math.floor(Date.now() / 1000)) {
+      db.prepare('DELETE FROM refresh_tokens WHERE id = ?').run(row.id) // просрочен — сразу подчищаем
+      return null
+    }
+    return row
+  },
+
+  deleteRefreshToken: (token) =>
+    db.prepare('DELETE FROM refresh_tokens WHERE token_hash = ?').run(hashToken(token)),
+
+  deleteAllRefreshTokensForUser: (userId) =>
+    db.prepare('DELETE FROM refresh_tokens WHERE user_id = ?').run(userId),
 
   getFolders: () => {
     const folders = db.prepare('SELECT * FROM folders ORDER BY sort').all()
@@ -314,19 +385,19 @@ module.exports = {
           FROM messages m JOIN users u ON m.user_id = u.id
           WHERE m.channel_id = ? AND m.id < ?
           ORDER BY m.id DESC LIMIT ?`)
-          .all(channelId, before, limit)
+        .all(channelId, before, limit)
       : db.prepare(`SELECT m.*, u.name as user_name, u.avatar as user_avatar, u.color as user_color
           FROM messages m JOIN users u ON m.user_id = u.id
           WHERE m.channel_id = ?
           ORDER BY m.id DESC LIMIT ?`)
-          .all(channelId, limit)
+        .all(channelId, limit)
 
     // ↓ ВОТ ЧТО НУЖНО ДОБАВИТЬ — парсим JSON поля
     return q.reverse().map(row => ({
       ...row,
       attachment: row.attachment ? JSON.parse(row.attachment) : null,
-      link_meta:  row.link_meta  ? JSON.parse(row.link_meta)  : null,
-      reactions:  []  // реакции подтягиваются отдельно в server.js
+      link_meta: row.link_meta ? JSON.parse(row.link_meta) : null,
+      reactions: []  // реакции подтягиваются отдельно в server.js
     }))
   },
 
@@ -338,7 +409,7 @@ module.exports = {
   createMessage: (channelId, userId, text, type = 'text', attachment = null, linkMeta = null) =>
     db.prepare(`INSERT INTO messages (channel_id, user_id, text, type, attachment, link_meta)
       VALUES (?,?,?,?,?,?)`).run(channelId, userId, text, type, attachment, linkMeta
-        ? JSON.stringify(linkMeta) : null),
+      ? JSON.stringify(linkMeta) : null),
 
   editMessage: (id, text, userId) =>
     db.prepare(`UPDATE messages SET text=?, edited=1, updated_at=unixepoch()
@@ -436,7 +507,7 @@ module.exports = {
         INSERT INTO kanban_cards (column_id, title, description, assignee_id, priority, position, due_date, done_at)
         VALUES (?,?,?,?,?,?,?,?)
       `).run(column_id, title, description || null, assignee_id || null, priority || 'medium', pos,
-             due_date || null, isTerminal ? Math.floor(Date.now() / 1000) : null)
+        due_date || null, isTerminal ? Math.floor(Date.now() / 1000) : null)
       return db.prepare(`
         SELECT k.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
         FROM kanban_cards k LEFT JOIN users u ON k.assignee_id = u.id WHERE k.id=?
@@ -460,7 +531,7 @@ module.exports = {
           done_at     = ?
         WHERE id = ?
       `).run(title || null, description || null, assignee_id ?? null, priority || null,
-             column_id || null, due_date ?? null, doneAt, id)
+        column_id || null, due_date ?? null, doneAt, id)
       return db.prepare(`
         SELECT k.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
         FROM kanban_cards k LEFT JOIN users u ON k.assignee_id = u.id WHERE k.id=?
@@ -565,13 +636,21 @@ module.exports = {
     },
     removeTagFromSubtask: (subtask_id, tag_id) => {
       db.prepare('DELETE FROM kanban_subtask_tags WHERE subtask_id=? AND tag_id=?').run(subtask_id, tag_id)
+      deleteTagIfOrphaned(tag_id)
       return tagsForSubtask(subtask_id)
     },
     reorderSubtasks: (subtasks) => {
       const stmt = db.prepare('UPDATE kanban_subtasks SET status=?, position=? WHERE id=?')
-      const run  = db.transaction(() => subtasks.forEach((s, i) => stmt.run(s.status, i, s.id)))
+      const run = db.transaction(() => subtasks.forEach((s, i) => stmt.run(s.status, i, s.id)))
       run()
     },
-    deleteSubtask: (id) => db.prepare('DELETE FROM kanban_subtasks WHERE id=?').run(id)
+    deleteSubtask: (id) => {
+      // Теги этой подзадачи — до удаления, иначе после CASCADE уже не узнать,
+      // какие вообще были привязаны, чтобы проверить их на "остался ли кто-то ещё"
+      const tagIds = db.prepare('SELECT tag_id FROM kanban_subtask_tags WHERE subtask_id=?').all(id).map(r => r.tag_id)
+      const result = db.prepare('DELETE FROM kanban_subtasks WHERE id=?').run(id)
+      tagIds.forEach(deleteTagIfOrphaned) // ON DELETE CASCADE уже убрал связи — просто чистим осиротевшие теги
+      return result
+    }
   }
 }
