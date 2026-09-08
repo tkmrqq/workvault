@@ -22,9 +22,18 @@
           <button class="btn-restore-inline" @click="unarchive"><RotateCcw :size="12" :stroke-width="2.2" /> Восстановить</button>
         </div>
 
+        <!-- Мобилка: описание и подзадачи по очереди на весь экран,
+             а не сдавленные друг над другом (было тесно, см. жалобу) -->
+        <div class="mobile-tabs mobile-only">
+          <button class="mobile-tab" :class="{ active: mobileTab === 'info' }" @click="mobileTab = 'info'">Описание</button>
+          <button class="mobile-tab" :class="{ active: mobileTab === 'subtasks' }" @click="mobileTab = 'subtasks'">
+            Подзадачи<span v-if="card.subtasks?.length" class="mobile-tab-count">{{ card.subtasks.length }}</span>
+          </button>
+        </div>
+
         <div class="card-page-content">
           <!-- LEFT: card info -->
-          <div class="card-info">
+          <div class="card-info" :class="{ 'mobile-hidden': mobileTab !== 'info' }">
             <div class="card-info-header">
               <div class="card-priority-badge" :class="card.priority">
                 <component :is="priorityIcon(card.priority)" :size="11" :stroke-width="3" />{{ priorityLabel(card.priority) }}
@@ -37,15 +46,6 @@
                 </button>
               </div>
             </div>
-
-            <!-- View mode -->
-            <template v-if="!editMode">
-              <h1 class="card-page-title">{{ card.title }}</h1>
-              <div v-if="card.description" class="card-page-desc markdown-body compact-mobile" v-html="renderMarkdown(card.description)"></div>
-              <button v-if="card.description" type="button" class="desc-expand-hint mobile-only" @click="descFullscreen = true">Читать целиком</button>
-              <p v-else class="card-page-desc empty">Нет описания</p>
-            </template>
-
             <!-- Полноэкранное чтение описания карточки на мобилке -->
             <Teleport to="body">
               <div v-if="descFullscreen" class="md-fs-overlay">
@@ -60,6 +60,13 @@
                 </div>
               </div>
             </Teleport>
+            <!-- View mode -->
+            <template v-if="!editMode">
+              <h1 class="card-page-title">{{ card.title }}</h1>
+              <div v-if="card.description" class="card-page-desc markdown-body compact-mobile" v-html="renderMarkdown(card.description)"></div>
+              <button v-if="card.description" type="button" class="desc-expand-hint mobile-only" @click="descFullscreen = true">Читать целиком</button>
+              <p v-else class="card-page-desc empty">Нет описания</p>
+            </template>
 
             <!-- Edit mode -->
             <template v-else>
@@ -140,7 +147,7 @@
           </div>
 
           <!-- RIGHT: subtasks mini-kanban -->
-          <div class="subtasks-area">
+          <div class="subtasks-area" :class="{ 'mobile-hidden': mobileTab !== 'subtasks' }">
             <div class="subtasks-header">
               <h2 class="subtasks-title">Подзадачи</h2>
               <div class="subtasks-header-actions">
@@ -397,6 +404,7 @@ const users   = ref([])
 const columns = ref([])
 const editMode = ref(false)
 const descFullscreen = ref(false)
+const mobileTab = ref('info') // 'info' | 'subtasks' — переключатель виден только на мобилке
 const edit = reactive({ title: '', description: '', priority: 'medium', assignee_id: null, column_id: null, due_date: '' })
 
 // ─── Subtask columns ──────────────────────────────────────
@@ -887,6 +895,23 @@ onUnmounted(() => {
 }
 .desc-expand-hint:hover { background: var(--accent-soft); }
 
+.mobile-tabs {
+  gap: 4px; padding: 10px 16px 0;
+}
+.mobile-tab {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 9px; border-radius: var(--radius-md);
+  font-size: var(--text-sm); font-weight: 600; color: var(--text-faint);
+  background: var(--surface-3); border: 1px solid var(--border);
+  transition: all var(--transition);
+}
+.mobile-tab.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+.mobile-tab-count {
+  font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: var(--radius-full);
+  background: var(--surface); color: var(--text-faint);
+}
+.mobile-tab.active .mobile-tab-count { background: var(--accent); color: #fff; }
+
 @media (max-width: 860px) {
   .mobile-only { display: flex; }
   .desc-expand-hint { display: block; }
@@ -1201,11 +1226,10 @@ onUnmounted(() => {
     overflow: hidden;
   }
   .card-info {
-    flex-shrink: 0;
-    max-height: 42dvh;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     border-right: none;
-    border-bottom: 1px solid var(--border);
   }
   .card-info-header { flex-wrap: wrap; }
   .card-info-actions { flex-wrap: wrap; }
@@ -1216,6 +1240,7 @@ onUnmounted(() => {
     overflow: hidden;
     padding: 16px 12px;
   }
+  .mobile-hidden { display: none !important; } /* видна только активная вкладка — было тесно, когда обе секции жались друг над другом */
   .subtasks-board {
     flex: 1;
     min-height: 0;
