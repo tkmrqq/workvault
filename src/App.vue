@@ -2,7 +2,7 @@
   <div :data-theme="store.theme">
     <router-view />
     <ConfirmModal />
-    <CommandPalette />
+    <CommandPalette v-if="store.user" />
   </div>
 </template>
 
