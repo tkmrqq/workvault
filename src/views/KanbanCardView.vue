@@ -279,22 +279,29 @@
               </div>
               <div class="tags-input-row">
                 <input
+                  ref="tagInputEl"
                   v-model="tagInput"
                   class="field-input tags-input"
                   placeholder="Название тега + Enter"
                   maxlength="30"
                   @keydown.enter.prevent="submitTagInput"
-                  @focus="showTagSuggestions = true"
+                  @focus="onTagInputFocus"
                   @blur="onTagInputBlur"
                 />
-                <div v-if="showTagSuggestions && tagSuggestions.length" class="tags-suggestions">
+              </div>
+              <Teleport to="body">
+                <div
+                  v-if="showTagSuggestions && tagSuggestions.length"
+                  class="tags-suggestions"
+                  :style="{ top: tagDropdownPos.top + 'px', left: tagDropdownPos.left + 'px', width: tagDropdownPos.width + 'px' }"
+                >
                   <button
                     v-for="tag in tagSuggestions" :key="tag.id"
                     class="tag-suggestion"
                     @mousedown.prevent="addSubtaskTag(tag.name)"
                   ><span class="tag-suggestion-dot" :style="{ background: tag.color }"></span>{{ tag.name }}</button>
                 </div>
-              </div>
+              </Teleport>
             </template>
           </div>
           <div class="modal-footer">
@@ -670,7 +677,23 @@ let subModalSnapshot = null
 // Все теги, когда-либо созданные в проекте — для автокомплита при вводе.
 const allTags = ref([])
 const tagInput = ref('')
+const tagInputEl = ref(null)
 const showTagSuggestions = ref(false)
+// Дропдаун теперь через Teleport в body (иначе overflow:auto на .modal-body
+// обрезал его — та же ловушка, что уже была с другими всплывающими блоками),
+// поэтому позицию считаем вручную от реальных координат инпута на экране.
+const tagDropdownPos = reactive({ top: 0, left: 0, width: 0 })
+function positionTagDropdown() {
+  const rect = tagInputEl.value?.getBoundingClientRect()
+  if (!rect) return
+  tagDropdownPos.top = rect.bottom + 4
+  tagDropdownPos.left = rect.left
+  tagDropdownPos.width = rect.width
+}
+function onTagInputFocus() {
+  showTagSuggestions.value = true
+  positionTagDropdown()
+}
 const tagSuggestions = computed(() => {
   const q = tagInput.value.trim().toLowerCase()
   if (!q) return []
@@ -1152,9 +1175,9 @@ onUnmounted(() => {
 .tags-input-row { position: relative; }
 .tags-input { width: 100%; }
 .tags-suggestions {
-  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  position: fixed; /* Teleport в body — координаты приходят из JS (см. positionTagDropdown) */
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md); z-index: 10; overflow: hidden;
+  box-shadow: var(--shadow-md); z-index: 3600; overflow: hidden;
 }
 .tag-suggestion {
   display: flex; align-items: center; gap: 8px; width: 100%;

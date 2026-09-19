@@ -39,7 +39,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { useCommandPalette } from '@/composables/useCommandPalette'
@@ -117,6 +117,11 @@ function onGlobalKeydown(e) {
   }
 }
 window.addEventListener('keydown', onGlobalKeydown)
+// Раньше монтировался раз навсегда в App.vue, теперь — только пока юзер
+// залогинен (v-if="store.user"), так что при логауте реально размонтируется
+// и заново монтируется при следующем логине — без очистки слушатели
+// копились бы с каждым циклом логин/логаут.
+onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 </script>
 
 <style scoped>
