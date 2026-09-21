@@ -36,6 +36,14 @@ const JWT_REFRESH_EXPIRES_MS = 30 * 24 * 60 * 60 * 1000 // держим в мс 
 // secure-флаг для cookie — включать только когда сервер реально висит за TLS
 // (nginx/прод); пока HTTP — secure=true просто не даст браузеру отправить cookie вообще
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true'
+if (COOKIE_SECURE && !APP_URL.startsWith('https')) {
+  console.warn(
+    '⚠️  COOKIE_SECURE=true, но APP_URL не начинается с https (' + APP_URL + ').\n' +
+    '   Браузер молча откажется сохранять access_token/refresh_token-куки по обычному http —\n' +
+    '   выглядит это как "залогинился, но сессия сразу истекла"/сокет не подключается.\n' +
+    '   Локально (без TLS) держи COOKIE_SECURE=false.'
+  )
+}
 
 module.exports = {
   PORT, HOST, APP_URL,

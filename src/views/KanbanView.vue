@@ -36,12 +36,16 @@
             v-for="ws in workspaces" :key="ws.id"
             class="ws-tab" :class="{ active: ws.id === activeWorkspaceId }"
             @click="switchWorkspace(ws.id)"
-            @dblclick="renameWorkspace(ws)"
+            @dblclick="openEditWorkspace(ws)"
           >
-            <span>{{ ws.icon }}</span> {{ ws.name }}
+            <span class="ws-tab-badge" :style="{ background: ws.color || '#7c6af7' }">
+              <component :is="resolveWorkspaceIcon(ws.icon)" :size="12" :stroke-width="2.4" />
+            </span>
+            {{ ws.name }}
+            <Pencil class="ws-tab-edit" @click.stop="openEditWorkspace(ws)" :size="11" :stroke-width="2.2" />
             <X v-if="workspaces.length > 1" class="ws-tab-del" @click.stop="removeWorkspace(ws)" :size="11" :stroke-width="2.5" />
           </button>
-          <button class="ws-tab ws-tab-add" @click="addWorkspace" title="Новая рабочая зона"><Plus :size="13" :stroke-width="2.5" /></button>
+          <button class="ws-tab ws-tab-add" @click="openCreateWorkspace" title="Новая рабочая зона"><Plus :size="13" :stroke-width="2.5" /></button>
         </div>
 
         <!-- Board -->
@@ -273,6 +277,13 @@
         </div>
       </div>
     </Teleport>
+
+    <WorkspaceModal
+      :open="wsModal.open"
+      :workspace="wsModal.editing"
+      @close="wsModal.open = false"
+      @save="saveWorkspace"
+    />
   </div>
 </template>
 
@@ -284,10 +295,12 @@ import { confirmDialog } from '@/composables/useConfirm'
 import TitleBar from '@/components/TitleBar.vue'
 import Sidebar  from '@/components/Sidebar.vue'
 import MobileMenuButton from '@/components/MobileMenuButton.vue'
+import WorkspaceModal from '@/components/WorkspaceModal.vue'
+import { resolveWorkspaceIcon } from '@/lib/workspaceIcons'
 import {
   Archive, Plus, X, Check, Calendar, RotateCcw,
   LayoutDashboard, ArrowDown, ArrowRight, ArrowUp,
-  ListChecks, Copy, Download, GripVertical
+  ListChecks, Copy, Download, GripVertical, Pencil
 } from 'lucide-vue-next'
 
 const store  = useAppStore()
@@ -598,27 +611,36 @@ function switchWorkspace(id) {
   activeWorkspaceId.value = id
   loadBoard()
 }
-async function addWorkspace() {
-  const name = prompt('Название рабочей зоны')
-  if (!name?.trim()) return
-  const r = await fetch(`${API}/api/kanban/workspaces`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: name.trim() })
-  })
-  const ws = await r.json()
-  await loadWorkspaces()
-  switchWorkspace(ws.id)
+// ─── Create/edit workspace modal ───────────────────────────
+const wsModal = reactive({ open: false, editing: null })
+
+function openCreateWorkspace() {
+  wsModal.editing = null
+  wsModal.open = true
 }
-async function renameWorkspace(ws) {
-  const name = prompt('Новое название зоны', ws.name)
-  if (!name?.trim() || name.trim() === ws.name) return
-  await fetch(`${API}/api/kanban/workspaces/${ws.id}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: name.trim() })
-  })
-  await loadWorkspaces()
+function openEditWorkspace(ws) {
+  wsModal.editing = ws
+  wsModal.open = true
+}
+async function saveWorkspace({ name, icon, color }) {
+  if (wsModal.editing) {
+    await fetch(`${API}/api/kanban/workspaces/${wsModal.editing.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, icon, color })
+    })
+    await loadWorkspaces()
+  } else {
+    const r = await fetch(`${API}/api/kanban/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, icon, color })
+    })
+    const ws = await r.json()
+    await loadWorkspaces()
+    switchWorkspace(ws.id)
+  }
+  wsModal.open = false
 }
 async function removeWorkspace(ws) {
   if (!await confirmDialog(`Удалить зону «${ws.name}» вместе со всеми её колонками и задачами?`, { danger: true, confirmLabel: 'Удалить' })) return
@@ -778,6 +800,17 @@ onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseu
 }
 .ws-tab:hover { background: var(--hover); }
 .ws-tab.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+.ws-tab-badge {
+  width: 18px; height: 18px; border-radius: 6px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff;
+}
+.ws-tab-edit {
+  margin-left: 2px; opacity: 0; color: var(--text-faint);
+  transition: opacity var(--transition), color var(--transition);
+}
+.ws-tab:hover .ws-tab-edit { opacity: .6; }
+.ws-tab-edit:hover { opacity: 1 !important; color: var(--accent); }
 .ws-tab-del {
   margin-left: 2px; opacity: .5; font-size: 10px;
   transition: opacity var(--transition);

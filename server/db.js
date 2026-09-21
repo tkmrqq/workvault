@@ -62,6 +62,7 @@ db.exec(`
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     name     TEXT    NOT NULL,
     icon     TEXT    NOT NULL DEFAULT '🗂',
+    color    TEXT    NOT NULL DEFAULT '#7c6af7',
     sort     INTEGER NOT NULL DEFAULT 0
   );
 
@@ -153,6 +154,17 @@ db.prepare(`
 `).run()
 
 // ─── Миграции для существующих БД (добавляем колонки, если их ещё нет) ───
+try { db.prepare("ALTER TABLE kanban_workspaces ADD COLUMN color TEXT NOT NULL DEFAULT '#7c6af7'").run() } catch { }
+// Раньше icon хранил эмодзи (🗂, 🚀ит.п.) — теперь это ключ lucide-иконки
+// (см. src/lib/workspaceIcons.js на фронте). Одноразово переводим старые
+// эмодзи-значения на дефолтный ключ 'folder', чтобы новый бейдж с иконкой
+// не остался пустым у существующих рабочих зон.
+try {
+  db.prepare(`
+    UPDATE kanban_workspaces SET icon = 'folder'
+    WHERE icon IS NULL OR icon = '' OR icon NOT GLOB '[a-z-]*'
+  `).run()
+} catch { }
 try { db.prepare('ALTER TABLE kanban_columns ADD COLUMN workspace_id INTEGER REFERENCES kanban_workspaces(id)').run() } catch { }
 try { db.prepare('ALTER TABLE kanban_columns ADD COLUMN is_terminal INTEGER NOT NULL DEFAULT 0').run() } catch { }
 try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN due_date INTEGER').run() } catch { }
@@ -163,7 +175,7 @@ try { db.prepare('ALTER TABLE kanban_subtasks ADD COLUMN description TEXT').run(
 // Дефолтная рабочая зона + привязка "старых" колонок без workspace_id
 const wsCount = db.prepare('SELECT COUNT(*) as c FROM kanban_workspaces').get().c
 if (wsCount === 0) {
-  db.prepare('INSERT INTO kanban_workspaces (name, icon, sort) VALUES (?,?,?)').run('Основное', '🗂', 0)
+  db.prepare('INSERT INTO kanban_workspaces (name, icon, color, sort) VALUES (?,?,?,?)').run('Основное', 'folder', '#7c6af7', 0)
 }
 const defaultWsId = db.prepare('SELECT id FROM kanban_workspaces ORDER BY sort LIMIT 1').get().id
 db.prepare('UPDATE kanban_columns SET workspace_id = ? WHERE workspace_id IS NULL').run(defaultWsId)
@@ -413,10 +425,13 @@ module.exports = {
       FROM reactions r JOIN users u ON r.user_id = u.id
       WHERE r.message_id = ?`).all(messageId),
 
+  // attachment и linkMeta приходят сюда УЖЕ сериализованными строками (или null) —
+  // сериализация делается один раз, на вызывающей стороне (server.js), здесь
+  // просто пишем как есть. Раньше linkMeta сериализовался второй раз прямо тут —
+  // на выходе получался JSON-строка JSON-строки, и превью ссылок ломались.
   createMessage: (channelId, userId, text, type = 'text', attachment = null, linkMeta = null) =>
     db.prepare(`INSERT INTO messages (channel_id, user_id, text, type, attachment, link_meta)
-      VALUES (?,?,?,?,?,?)`).run(channelId, userId, text, type, attachment, linkMeta
-      ? JSON.stringify(linkMeta) : null),
+      VALUES (?,?,?,?,?,?)`).run(channelId, userId, text, type, attachment, linkMeta),
 
   editMessage: (id, text, userId) =>
     db.prepare(`UPDATE messages SET text=?, edited=1, updated_at=unixepoch()
@@ -447,10 +462,10 @@ module.exports = {
   kanban: {
     // ── Рабочие зоны ──────────────────────────────────────
     getWorkspaces: () => db.prepare('SELECT * FROM kanban_workspaces ORDER BY sort').all(),
-    createWorkspace: (name, icon) => {
+    createWorkspace: (name, icon, color) => {
       const pos = db.prepare('SELECT COUNT(*) as c FROM kanban_workspaces').get().c
-      const r = db.prepare('INSERT INTO kanban_workspaces (name, icon, sort) VALUES (?,?,?)')
-        .run(name || 'Новая зона', icon || '🗂', pos)
+      const r = db.prepare('INSERT INTO kanban_workspaces (name, icon, color, sort) VALUES (?,?,?,?)')
+        .run(name || 'Новая зона', icon || 'folder', color || '#7c6af7', pos)
       const wsId = r.lastInsertRowid
       // Новой зоне сразу даём стандартный набор колонок
       db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'To Do', 0, '#61afef', 0)
@@ -458,9 +473,9 @@ module.exports = {
       db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'Done', 2, '#4caf7d', 1)
       return db.prepare('SELECT * FROM kanban_workspaces WHERE id=?').get(wsId)
     },
-    updateWorkspace: (id, { name, icon }) => {
-      db.prepare('UPDATE kanban_workspaces SET name=COALESCE(?,name), icon=COALESCE(?,icon) WHERE id=?')
-        .run(name || null, icon || null, id)
+    updateWorkspace: (id, { name, icon, color }) => {
+      db.prepare('UPDATE kanban_workspaces SET name=COALESCE(?,name), icon=COALESCE(?,icon), color=COALESCE(?,color) WHERE id=?')
+        .run(name || null, icon || null, color || null, id)
       return db.prepare('SELECT * FROM kanban_workspaces WHERE id=?').get(id)
     },
     deleteWorkspace: (id) => {

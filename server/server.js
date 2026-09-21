@@ -20,7 +20,11 @@ const {
 const app = express()
 const server = http.createServer(app)
 const io = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST'], credentials: true }
+  // origin:'*' вместе с credentials:true — невалидная по спеке комбинация
+  // (в отличие от обычного REST-cors чуть ниже, тут раньше стояло именно
+  // так). Приводим к тому же виду: true отражает реальный Origin запроса,
+  // а не буквальную звёздочку.
+  cors: { origin: true, methods: ['GET', 'POST'], credentials: true }
 })
 
 // За nginx — без этого req.ip показывал бы IP самого nginx-контейнера для
@@ -296,9 +300,9 @@ app.get('/api/kanban/workspaces', (_, res) => {
 })
 
 app.post('/api/kanban/workspaces', (req, res) => {
-  const { name, icon } = req.body
+  const { name, icon, color } = req.body
   if (!name?.trim()) return res.status(400).json({ error: 'Название обязательно' })
-  const ws = db.kanban.createWorkspace(name.trim(), icon)
+  const ws = db.kanban.createWorkspace(name.trim(), icon, color)
   io.emit('kanban:workspaces:update')
   res.json(ws)
 })
@@ -455,12 +459,31 @@ app.delete('/api/kanban/subtasks/:id/tags/:tagId', (req, res) => {
 // клиенту вообще не нужно ничего слать, cookie летит автоматически.
 io.use((socket, next) => {
   try {
-    const cookies = cookie.parse(socket.handshake.headers.cookie || '')
-    const payload = cookies.access_token && verifyAccessToken(cookies.access_token)
-    if (!payload) return next(new Error('unauthorized'))
+    const rawCookieHeader = socket.handshake.headers.cookie || ''
+    const cookies = cookie.parse(rawCookieHeader)
+    if (!cookies.access_token) {
+      // Кука вообще не долетела до сервера — не проблема самого токена,
+      // а проблема транспорта/CORS/secure-флага. Печатаем origin запроса,
+      // чтобы сразу было видно, с какого адреса реально пришёл хендшейк.
+      console.warn(
+        `[socket auth] нет access_token в куках хендшейка. ` +
+        `Origin: ${socket.handshake.headers.origin || '—'}, ` +
+        `есть ли Cookie-заголовок вообще: ${rawCookieHeader ? 'да, но без access_token' : 'нет совсем'}`
+      )
+      return next(new Error('unauthorized'))
+    }
+    const payload = verifyAccessToken(cookies.access_token)
+    if (!payload) {
+      // Кука долетела, но verify не прошёл — почти всегда просто истёк
+      // access_token (живёт 15 мин) и клиент ещё не успел обновить его
+      // через /api/auth/refresh
+      console.warn('[socket auth] access_token есть, но не прошёл verify (истёк или подписан другим JWT_SECRET)')
+      return next(new Error('unauthorized'))
+    }
     socket.user = { id: payload.sub, name: payload.name, role: payload.role }
     next()
   } catch (e) {
+    console.warn('[socket auth] исключение при разборе куки:', e.message)
     next(new Error('unauthorized'))
   }
 })
@@ -489,7 +512,11 @@ io.on('connection', (socket) => {
   // в БД пишем через JSON.stringify, из БД читаем через getMessages (парсит сам)
   // userId больше не берём из тела события — только из проверенного socket.user,
   // иначе любой клиент мог отправить сообщение "от имени" произвольного userId.
-  socket.on('message:send', ({ channelId, text, attachment, linkMeta }) => {
+  // ack — необязательный callback, если клиент его передал (io.emit с колбэком
+  // на клиенте). Так фронт узнаёт результат отправки напрямую по этому конкретному
+  // сообщению, а не гадает по общему socket.on('error') (который раньше вообще
+  // никто не слушал — сообщение просто пропадало без следа при любой ошибке).
+  socket.on('message:send', ({ channelId, text, attachment, linkMeta }, ack) => {
     try {
       const type = attachment ? (attachment.isImage ? 'image' : 'file') : 'text'
       const result = db.createMessage(
@@ -500,10 +527,15 @@ io.on('connection', (socket) => {
       // getMessages парсит JSON — берём последнее сообщение по id
       const msgs = db.getMessages(channelId, 1)
       const msg = msgs.find(m => m.id === result.lastInsertRowid)
-      if (!msg) return
+      if (!msg) {
+        ack?.({ ok: false, error: 'Сообщение не найдено после сохранения' })
+        return
+      }
       io.to(`channel:${channelId}`).emit('message:new', withReactions(msg))
+      ack?.({ ok: true, id: msg.id })
     } catch (e) {
       console.error('message:send error:', e)
+      ack?.({ ok: false, error: e.message })
       socket.emit('error', e.message)
     }
   })

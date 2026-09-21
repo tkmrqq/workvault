@@ -375,8 +375,9 @@
           <div class="modal-body">
             <label class="field-label">Рабочая зона</label>
             <select v-model="moveModal.workspaceId" class="field-select" @change="onMoveWorkspaceChange">
-              <option v-for="ws in allWorkspaces" :key="ws.id" :value="ws.id">{{ ws.icon }} {{ ws.name }}</option>
+              <option v-for="ws in moveableWorkspaces" :key="ws.id" :value="ws.id">{{ ws.name }}</option>
             </select>
+            <p v-if="!moveableWorkspaces.length" class="move-hint">Больше нет других рабочих зон для переноса</p>
 
             <label class="field-label">Колонка</label>
             <select v-model="moveModal.columnId" class="field-select" :disabled="!moveTargetColumns.length">
@@ -459,7 +460,7 @@ async function openMoveModal() {
     const r = await apiFetch(`${API}/api/kanban/workspaces`)
     if (r) allWorkspaces.value = await r.json()
   }
-  moveModal.workspaceId = allWorkspaces.value[0]?.id ?? null
+  moveModal.workspaceId = moveableWorkspaces.value[0]?.id ?? null
   await onMoveWorkspaceChange()
 }
 async function onMoveWorkspaceChange() {
@@ -585,6 +586,10 @@ const progressPct = computed(() => {
 })
 
 const colTitle = computed(() => columns.value.find(c => c.id === card.value?.column_id)?.title || '')
+const currentWorkspaceId = computed(() => columns.value.find(c => c.id === card.value?.column_id)?.workspace_id ?? null)
+// В модалке переноса не показываем зону, в которой карточка уже лежит —
+// переносить «саму в себя» бессмысленно, только сбивает с толку
+const moveableWorkspaces = computed(() => allWorkspaces.value.filter(ws => ws.id !== currentWorkspaceId.value))
 const colColor = computed(() => columns.value.find(c => c.id === card.value?.column_id)?.color || 'var(--accent)')
 const isOverdue = computed(() => card.value?.due_date && card.value.due_date * 1000 < Date.now())
 

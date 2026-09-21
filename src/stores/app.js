@@ -305,13 +305,25 @@ export const useAppStore = defineStore('app', () => {
     return false
   }
 
+  // Возвращает промис, который резолвится по ack от сервера — раньше здесь было
+  // "выстрелил и забыл": если сервер не смог сохранить сообщение (протухшая
+  // сессия, невалидный channelId и т.п.), фронт об этом никак не узнавал —
+  // текст уже очищался в MessageInput, и сообщение просто исчезало без следа.
   async function sendMessage({ text, attachment, linkMeta }) {
-    if (!activeChId.value || !user.value) return
-    socket?.emit('message:send', {
-      channelId:  activeChId.value,
-      text:       text || null,
-      attachment: attachment || null,
-      linkMeta:   linkMeta || null
+    if (!activeChId.value || !user.value) throw new Error('Нет активного канала')
+    if (!socket?.connected) throw new Error('Нет соединения с сервером — сообщение не отправлено')
+    return new Promise((resolve, reject) => {
+      socket.timeout(8000).emit('message:send', {
+        channelId:  activeChId.value,
+        text:       text || null,
+        attachment: attachment || null,
+        linkMeta:   linkMeta || null
+      }, (err, ack) => {
+        // err — таймаут/дисконнект самого socket.io (см. .timeout() выше)
+        if (err) return reject(new Error('Сервер не ответил — проверь соединение'))
+        if (!ack?.ok) return reject(new Error(ack?.error || 'Не удалось отправить сообщение'))
+        resolve(ack)
+      })
     })
   }
 
