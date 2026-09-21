@@ -39,6 +39,7 @@
                 <component :is="priorityIcon(card.priority)" :size="11" :stroke-width="3" />{{ priorityLabel(card.priority) }}
               </div>
               <div class="card-info-actions">
+                <button v-if="!card.archived_at" class="btn-edit-card btn-icon-only" @click="openMoveModal" title="Переместить в другую зону"><FolderInput :size="13" :stroke-width="2" /></button>
                 <button v-if="!card.archived_at" class="btn-edit-card btn-archive-card btn-icon-only" @click="archive" title="В архив"><Archive :size="13" :stroke-width="2" /></button>
                 <button class="btn-edit-card" @click="toggleEdit">
                   <template v-if="editMode">Отмена</template>
@@ -187,6 +188,7 @@
 
                 <div class="sub-col-cards">
                   <div v-if="subDragOverCol.status === col.status && col.items.length" class="drop-line" :style="{ top: subDragOverCol.y + 'px' }"></div>
+                  <TransitionGroup name="sub-card" tag="div" class="sub-col-cards-list">
                   <div
                     v-for="sub in col.items"
                     :key="sub.id"
@@ -216,6 +218,7 @@
                       {{ sub.assignee_name }}
                     </div>
                   </div>
+                  </TransitionGroup>
                   <div v-if="!col.items.length" class="sub-col-empty" :class="{ 'drag-over': subDragOverCol.status === col.status }">Перетащите сюда</div>
                 </div>
               </div>
@@ -360,11 +363,41 @@
         </div>
       </div>
     </Teleport>
+
+    <!-- Modal: Move card to another workspace -->
+    <Teleport to="body">
+      <div v-if="moveModal.open" class="modal-overlay" @click.self="moveModal.open = false">
+        <div class="modal">
+          <div class="modal-header">
+            <h2 class="modal-title-row"><FolderInput :size="17" :stroke-width="2" /> Переместить задачу</h2>
+            <button class="modal-close" @click="moveModal.open = false"><X :size="14" :stroke-width="2.5" /></button>
+          </div>
+          <div class="modal-body">
+            <label class="field-label">Рабочая зона</label>
+            <select v-model="moveModal.workspaceId" class="field-select" @change="onMoveWorkspaceChange">
+              <option v-for="ws in allWorkspaces" :key="ws.id" :value="ws.id">{{ ws.icon }} {{ ws.name }}</option>
+            </select>
+
+            <label class="field-label">Колонка</label>
+            <select v-model="moveModal.columnId" class="field-select" :disabled="!moveTargetColumns.length">
+              <option v-for="col in moveTargetColumns" :key="col.id" :value="col.id">{{ col.title }}</option>
+            </select>
+            <p v-if="!moveTargetColumns.length" class="move-hint">В этой зоне пока нет колонок</p>
+          </div>
+          <div class="modal-footer">
+            <button class="btn-cancel" @click="moveModal.open = false">Отмена</button>
+            <button class="btn-save" :disabled="!moveModal.columnId || moving" @click="submitMove">
+              {{ moving ? 'Переношу...' : 'Переместить' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, TransitionGroup } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { confirmDialog } from '@/composables/useConfirm'
@@ -376,7 +409,7 @@ import { renderMarkdown } from '@/composables/useMarkdown'
 import {
   ArrowLeft, Archive, RotateCcw, Pencil, X, Plus,
   ArrowDown, ArrowRight as ArrowRightIcon, ArrowUp as ArrowUpIcon, Tag, GripVertical,
-  ListChecks, Copy, Download
+  ListChecks, Copy, Download, FolderInput
 } from 'lucide-vue-next'
 
 const store  = useAppStore()
@@ -413,6 +446,47 @@ const editMode = ref(false)
 const descFullscreen = ref(false)
 const mobileTab = ref('info') // 'info' | 'subtasks' — переключатель виден только на мобилке
 const edit = reactive({ title: '', description: '', priority: 'medium', assignee_id: null, column_id: null, due_date: '' })
+
+// ─── Move to another workspace ─────────────────────────────
+const allWorkspaces = ref([])
+const moveModal = reactive({ open: false, workspaceId: null, columnId: null })
+const moveTargetColumns = ref([])
+const moving = ref(false)
+
+async function openMoveModal() {
+  moveModal.open = true
+  if (!allWorkspaces.value.length) {
+    const r = await apiFetch(`${API}/api/kanban/workspaces`)
+    if (r) allWorkspaces.value = await r.json()
+  }
+  moveModal.workspaceId = allWorkspaces.value[0]?.id ?? null
+  await onMoveWorkspaceChange()
+}
+async function onMoveWorkspaceChange() {
+  moveModal.columnId = null
+  if (!moveModal.workspaceId) { moveTargetColumns.value = []; return }
+  const r = await apiFetch(`${API}/api/kanban?workspace_id=${moveModal.workspaceId}`)
+  if (!r) return
+  const board = await r.json()
+  moveTargetColumns.value = board
+  moveModal.columnId = board[0]?.id ?? null
+}
+async function submitMove() {
+  if (!moveModal.columnId || moving.value) return
+  moving.value = true
+  try {
+    const r = await apiFetch(`${API}/api/kanban/cards/${card.value.id}/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ column_id: moveModal.columnId })
+    })
+    if (!r) return
+    moveModal.open = false
+    router.push('/kanban') // карточка уехала в другую зону — на этой странице ей больше не место
+  } finally {
+    moving.value = false
+  }
+}
 
 // ─── Subtask columns ──────────────────────────────────────
 const STATUSES = [
@@ -1066,6 +1140,8 @@ onUnmounted(() => {
   display: flex; flex-direction: column; gap: 6px;
   padding: 4px 8px 10px; overflow-y: auto; flex: 1;
 }
+.sub-col-cards-list { display: flex; flex-direction: column; gap: 6px; }
+.sub-card-move { transition: transform .25s ease; }
 
 .drop-line {
   position: absolute; left: 8px; right: 8px;
@@ -1222,6 +1298,7 @@ onUnmounted(() => {
 }
 .modal-close:hover { background: var(--hover); color: var(--text); }
 .modal-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; overflow-x: hidden; min-height: 0; min-width: 0; }
+.move-hint { font-size: var(--text-xs); color: var(--text-faint); margin-top: -6px; }
 .modal-footer {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 20px 16px; border-top: 1px solid var(--border);

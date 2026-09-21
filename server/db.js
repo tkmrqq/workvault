@@ -549,6 +549,25 @@ module.exports = {
       db.prepare('UPDATE kanban_cards SET column_id=?, position=?, done_at=? WHERE id=?')
         .run(column_id, position, isTerminal ? Math.floor(Date.now() / 1000) : null, id)
     },
+    // Перенос карточки в колонку, которая может принадлежать ДРУГОЙ рабочей
+    // зоне (не просто reorder внутри своей). В отличие от updateCard —
+    // сама считает позицию (в конец целевой колонки) и возвращает обе
+    // рабочие зоны (старую и новую), чтобы уведомить по сокету оба борда.
+    moveCardToColumn: (id, column_id) => {
+      const card = db.prepare('SELECT column_id FROM kanban_cards WHERE id=?').get(id)
+      if (!card) return null
+      const oldWorkspaceId = db.prepare('SELECT workspace_id FROM kanban_columns WHERE id=?').get(card.column_id)?.workspace_id
+      const newWorkspaceId = db.prepare('SELECT workspace_id FROM kanban_columns WHERE id=?').get(column_id)?.workspace_id
+      const isTerminal = db.prepare('SELECT is_terminal FROM kanban_columns WHERE id=?').get(column_id)?.is_terminal
+      const position = db.prepare('SELECT COUNT(*) as c FROM kanban_cards WHERE column_id=?').get(column_id).c
+      db.prepare('UPDATE kanban_cards SET column_id=?, position=?, done_at=? WHERE id=?')
+        .run(column_id, position, isTerminal ? Math.floor(Date.now() / 1000) : null, id)
+      const updated = db.prepare(`
+        SELECT k.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
+        FROM kanban_cards k LEFT JOIN users u ON k.assignee_id = u.id WHERE k.id=?
+      `).get(id)
+      return { card: updated, oldWorkspaceId, newWorkspaceId }
+    },
     deleteCard: (id) => {
       db.prepare('DELETE FROM kanban_cards WHERE id=?').run(id)
     },

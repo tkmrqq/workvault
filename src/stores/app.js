@@ -2,16 +2,29 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { io } from 'socket.io-client'
 import { installAuthFetch } from '@/lib/authFetch'
+import { getApiBase } from '@/lib/apiBase'
 
-const BASE = window.electronAPI?.serverUrl || ''
+const API = getApiBase()
 
 function resolveUrl(url) {
   if (!url) return ''
   if (url.startsWith('http')) return url
-  return `${BASE}${url}`
+  const base = getApiBase()
+  return base ? `${base}${url}` : url
 }
 
-const API = import.meta.env.VITE_API_URL || ''
+const messageEnterIds = ref({})
+function markMessageEnter(id) {
+  messageEnterIds.value = { ...messageEnterIds.value, [id]: true }
+  setTimeout(() => {
+    const next = { ...messageEnterIds.value }
+    delete next[id]
+    messageEnterIds.value = next
+  }, 180)
+}
+function isMessageEntering(id) {
+  return !!messageEnterIds.value[id]
+}
 
 export const useAppStore = defineStore('app', () => {
   // ── State ──────────────────────────────────────────────
@@ -172,7 +185,8 @@ export const useAppStore = defineStore('app', () => {
   function initSocket() {
     if (socket?.connected) return
 
-    socket = io(API || window.location.origin, {
+    const socketOrigin = getApiBase() || window.location.origin
+    socket = io(socketOrigin, {
       path: '/socket.io',
       transports: ['websocket', 'polling'],
       withCredentials: true // личность теперь проверяется по httpOnly-куке на хендшейке, не по emit('auth', ...)
@@ -229,6 +243,7 @@ export const useAppStore = defineStore('app', () => {
     if (!messages.value[chId]) messages.value[chId] = []
     if (!messages.value[chId].find(m => m.id === msg.id)) {
       messages.value[chId].push(msg)
+      if (chId === activeChId.value) markMessageEnter(msg.id)
     }
     if (chId !== activeChId.value && user.value?.id !== msg.user_id) {
       const body = msg.text || (msg.attachment ? '📎 файл' : '')
@@ -360,6 +375,7 @@ export const useAppStore = defineStore('app', () => {
     fetchUsers, checkSession, register, login, setPassword, logout, toggleTheme, getSocket,
     fetchFolders, setChannel, loadMore,
     sendMessage, uploadFile, unfurlUrl,
-    editMessage, deleteMessage, toggleReaction, sendTyping
+    editMessage, deleteMessage, toggleReaction, sendTyping,
+    isMessageEntering
   }
 })

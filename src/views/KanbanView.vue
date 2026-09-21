@@ -67,15 +67,24 @@
             <div class="col-cards">
               <div v-if="dragOverInfo.colId === col.id && col.cards.length" class="drop-line" :style="{ top: dragOverInfo.y + 'px' }"></div>
               <div v-if="!col.cards.length" class="col-empty-drop" :class="{ 'drag-over': dragOverInfo.colId === col.id }">Перетащите сюда</div>
+              <TransitionGroup name="k-card" tag="div" class="col-cards-list">
               <div
                 v-for="card in sortedCards(col.cards)" :key="card.id"
                 class="kanban-card"
                 :draggable="sortBy === 'manual'"
                 @dragstart="onDragStart($event, card)"
                 @dragend="onDragEnd"
-                :class="{ dragging: draggingCard?.id === card.id }"
+                :class="{
+                  dragging: draggingCard?.id === card.id,
+                  'terminal-flash': !!terminalFlashIds[card.id]
+                }"
                 @click="openEdit(card)"
               >
+                <div v-if="terminalFlashIds[card.id]" class="terminal-done-mark" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" class="terminal-check-svg" width="20" height="20">
+                    <path class="terminal-check-path" d="M5 13l4 4L19 7" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </div>
                   <div v-if="sortBy === 'manual'" class="card-drag-handle" @mousedown="dragHandleGrabbed = true" title="Потяни, чтобы переместить">
                     <GripVertical :size="13" :stroke-width="2" />
                   </div>
@@ -106,6 +115,7 @@
                     <div v-else class="card-assignee-empty">Не назначено</div>
                   </div>
               </div>
+              </TransitionGroup>
             </div>
           </div>
         </div>
@@ -267,7 +277,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, TransitionGroup } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { confirmDialog } from '@/composables/useConfirm'
@@ -311,6 +321,16 @@ const draggingCard = ref(null)
 const dragOverInfo  = reactive({ colId: null, index: null, y: 0 })
 
 const dragHandleGrabbed = ref(false)
+const terminalFlashIds = ref({})
+
+function flashTerminalDone(cardId) {
+  terminalFlashIds.value = { ...terminalFlashIds.value, [cardId]: true }
+  setTimeout(() => {
+    const next = { ...terminalFlashIds.value }
+    delete next[cardId]
+    terminalFlashIds.value = next
+  }, 400)
+}
 
 function onDragStart(e, card) {
   if (!dragHandleGrabbed.value) { e.preventDefault(); return }
@@ -371,6 +391,7 @@ async function onDrop(e, colId) {
   // поэтому просто убираем её из старого места и вставляем в новое — без дополнительной
   // подгонки индекса.
   const sourceCol = board.value.find(c => c.cards.some(cc => cc.id === card.id))
+  const fromTerminal = !!sourceCol?.is_terminal
   if (sourceCol) {
     const sourceIdx = sourceCol.cards.findIndex(cc => cc.id === card.id)
     sourceCol.cards.splice(sourceIdx, 1)
@@ -379,6 +400,7 @@ async function onDrop(e, colId) {
   if (targetCol) {
     insertIndex = Math.max(0, Math.min(insertIndex, targetCol.cards.length))
     targetCol.cards.splice(insertIndex, 0, { ...card, column_id: targetColId })
+    if (targetCol.is_terminal && !fromTerminal) flashTerminalDone(card.id)
   }
 
   const payload = []
@@ -886,7 +908,28 @@ onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseu
 }
 .card-progress { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
 .card-progress-bar { flex: 1; height: 4px; background: var(--surface-3); border-radius: 2px; overflow: hidden; }
-.card-progress-fill { height: 100%; background: var(--accent); border-radius: 2px; }
+.card-progress-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width .3s ease; }
+
+.col-cards-list { display: flex; flex-direction: column; gap: 8px; position: relative; }
+.k-card-move { transition: transform .25s ease; }
+
+.kanban-card.terminal-flash {
+  animation: terminalPulse .35s ease;
+}
+@keyframes terminalPulse {
+  0%, 100% { box-shadow: none; border-color: var(--border); }
+  45% { box-shadow: 0 0 0 3px var(--accent-soft); border-color: var(--accent); }
+}
+.terminal-done-mark {
+  position: absolute; top: 6px; left: 8px;
+  color: var(--green); pointer-events: none; z-index: 2;
+}
+.terminal-check-path {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  animation: terminalCheckDraw .32s ease forwards .06s;
+}
+@keyframes terminalCheckDraw { to { stroke-dashoffset: 0; } }
 .card-progress-label { font-size: 10px; font-weight: 700; color: var(--text-faint); }
 
 .card-footer { margin-top: 8px; }

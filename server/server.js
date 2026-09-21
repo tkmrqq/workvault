@@ -44,7 +44,7 @@ const storage = multer.diskStorage({
 })
 
 const ALLOWED_MIME = /^(image\/(jpeg|jpg|png|gif|webp)|video\/(mp4|webm|quicktime|x-matroska)|application\/(pdf|zip|x-zip-compressed|msword|vnd\.openxmlformats-officedocument\.wordprocessingml\.document)|text\/plain)$/
-const ALLOWED_EXT  = /\.(jpg|jpeg|png|gif|webp|mp4|webm|mov|mkv|pdf|zip|txt|doc|docx)$/i
+const ALLOWED_EXT = /\.(jpg|jpeg|png|gif|webp|mp4|webm|mov|mkv|pdf|zip|txt|doc|docx)$/i
 
 const upload = multer({
   storage,
@@ -56,7 +56,7 @@ const upload = multer({
       return cb(new Error('Папки не поддерживаются'), false)
     }
     const mimeOk = ALLOWED_MIME.test(file.mimetype)
-    const extOk  = ALLOWED_EXT.test(path.extname(file.originalname).toLowerCase())
+    const extOk = ALLOWED_EXT.test(path.extname(file.originalname).toLowerCase())
     if (!mimeOk && !extOk) {
       return cb(new Error(`Тип файла не поддерживается: ${file.mimetype}`), false)
     }
@@ -240,7 +240,7 @@ app.get('/api/messages/:channelId', (req, res) => {
     )
     res.json({
       messages: messages.map(withReactions),
-      hasMore:  messages.length === limit
+      hasMore: messages.length === limit
     })
   } catch (e) {
     console.error('getMessages error:', e)
@@ -252,10 +252,10 @@ app.get('/api/messages/:channelId', (req, res) => {
 app.post('/api/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Файл не получен' })
   res.json({
-    url:     `/uploads/${req.file.filename}`,
-    name:    req.file.originalname,
-    size:    req.file.size,
-    mime:    req.file.mimetype,
+    url: `/uploads/${req.file.filename}`,
+    name: req.file.originalname,
+    size: req.file.size,
+    mime: req.file.mimetype,
     isImage: req.file.mimetype.startsWith('image/')
   })
 })
@@ -270,10 +270,10 @@ app.post('/api/unfurl', async (req, res) => {
     const d = result.result
     res.json({
       url,
-      title:       d.ogTitle       || d.twitterTitle              || '',
-      description: d.ogDescription || d.twitterDescription        || '',
-      image:       d.ogImage?.[0]?.url || d.twitterImage?.[0]?.url || '',
-      siteName:    d.ogSiteName    || new URL(url).hostname
+      title: d.ogTitle || d.twitterTitle || '',
+      description: d.ogDescription || d.twitterDescription || '',
+      image: d.ogImage?.[0]?.url || d.twitterImage?.[0]?.url || '',
+      siteName: d.ogSiteName || new URL(url).hostname
     })
   } catch {
     res.json({ url })
@@ -342,6 +342,18 @@ app.patch('/api/kanban/cards/:id', (req, res) => {
   const card = db.kanban.updateCard(req.params.id, rest)
   emitBoardUpdate(workspace_id)
   res.json(card)
+})
+
+app.post('/api/kanban/cards/:id/move', (req, res) => {
+  const { column_id } = req.body
+  if (!column_id) return res.status(400).json({ error: 'column_id обязателен' })
+  const result = db.kanban.moveCardToColumn(req.params.id, column_id)
+  if (!result) return res.status(404).json({ error: 'Карточка не найдена' })
+  // Если перенесли в другую рабочую зону — у обеих досок (и старой, и новой)
+  // должно обновиться содержимое для всех, кто сейчас на них смотрит
+  emitBoardUpdate(result.oldWorkspaceId)
+  if (result.newWorkspaceId !== result.oldWorkspaceId) emitBoardUpdate(result.newWorkspaceId)
+  res.json(result.card)
 })
 
 app.post('/api/kanban/cards/reorder', (req, res) => {
@@ -483,11 +495,11 @@ io.on('connection', (socket) => {
       const result = db.createMessage(
         channelId, socket.user.id, text || null, type,
         attachment ? JSON.stringify(attachment) : null,
-        linkMeta   ? JSON.stringify(linkMeta)   : null
+        linkMeta ? JSON.stringify(linkMeta) : null
       )
       // getMessages парсит JSON — берём последнее сообщение по id
       const msgs = db.getMessages(channelId, 1)
-      const msg  = msgs.find(m => m.id === result.lastInsertRowid)
+      const msg = msgs.find(m => m.id === result.lastInsertRowid)
       if (!msg) return
       io.to(`channel:${channelId}`).emit('message:new', withReactions(msg))
     } catch (e) {
@@ -556,8 +568,8 @@ app.patch('/api/users/:id', (req, res) => {
         banner      = COALESCE(?, banner)
       WHERE id = ?
     `).run(name || null, avatar || null, color || null,
-           description !== undefined ? description : null,
-           banner || null, req.params.id)
+      description !== undefined ? description : null,
+      banner || null, req.params.id)
     res.json(db.getUserById(req.params.id))
   } catch (e) {
     res.status(500).json({ error: e.message })
