@@ -188,7 +188,7 @@
 
                 <div class="sub-col-cards">
                   <div v-if="subDragOverCol.status === col.status && col.items.length" class="drop-line" :style="{ top: subDragOverCol.y + 'px' }"></div>
-                  <TransitionGroup name="sub-card" tag="div" class="sub-col-cards-list">
+                  <TransitionGroup name="sub-card" tag="div" class="sub-col-cards-list" :css="uiPreferences.animationsEnabled">
                   <div
                     v-for="sub in col.items"
                     :key="sub.id"
@@ -407,6 +407,8 @@ import Sidebar  from '@/components/Sidebar.vue'
 import MobileMenuButton from '@/components/MobileMenuButton.vue'
 import MarkdownEditor from '@/components/MarkdownEditor.vue'
 import { renderMarkdown } from '@/composables/useMarkdown'
+import { getApiBase } from '@/lib/apiBase'
+import { uiPreferences } from '@/composables/useUiPreferences'
 import {
   ArrowLeft, Archive, RotateCcw, Pencil, X, Plus,
   ArrowDown, ArrowRight as ArrowRightIcon, ArrowUp as ArrowUpIcon, Tag, GripVertical,
@@ -416,7 +418,7 @@ import {
 const store  = useAppStore()
 const route  = useRoute()
 const router = useRouter()
-const API    = import.meta.env.VITE_API_URL || ''
+const API    = getApiBase()
 
 // ─── Сетевые запросы с обработкой ошибок ───────────────────
 const apiError = ref('')

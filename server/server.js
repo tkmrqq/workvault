@@ -460,7 +460,12 @@ app.delete('/api/kanban/subtasks/:id/tags/:tagId', (req, res) => {
 io.use((socket, next) => {
   try {
     const rawCookieHeader = socket.handshake.headers.cookie || ''
-    const cookies = cookie.parse(rawCookieHeader)
+    // cookie@2 exposes parseCookie(); parse() existed in older major versions.
+    const parseCookies = cookie.parseCookie || cookie.parse
+    if (typeof parseCookies !== 'function') {
+      throw new Error('cookie package does not expose a cookie parser')
+    }
+    const cookies = parseCookies(rawCookieHeader)
     if (!cookies.access_token) {
       // Кука вообще не долетела до сервера — не проблема самого токена,
       // а проблема транспорта/CORS/secure-флага. Печатаем origin запроса,

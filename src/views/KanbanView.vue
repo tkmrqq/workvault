@@ -13,19 +13,49 @@
             <h1 class="kanban-title">Канбан</h1>
           </div>
           <div class="kanban-header-right">
-            <select v-model="sortBy" class="sort-select" title="Сортировка карточек">
-              <option value="manual">Ручной порядок</option>
-              <option value="date">По дате</option>
-              <option value="title">По названию</option>
-              <option value="priority">По приоритету</option>
-            </select>
-            <button class="btn-list-count" @click="openListModal" title="Экспорт / импорт списком">
-              <ListChecks :size="14" :stroke-width="2" /> {{ totalCardsCount }}
+            <div ref="filterRoot" class="kanban-tools" @click.self="closeToolbarMenus">
+              <button class="toolbar-icon-btn" :class="{ active: sortOpen }" @click="sortOpen = !sortOpen; filtersOpen = false" :aria-expanded="sortOpen" :aria-label="`Сортировка: ${sortLabels[sortBy]}`" :title="`Сортировка: ${sortLabels[sortBy]}`">
+                <ArrowDownWideNarrow :size="16" :stroke-width="2" />
+              </button>
+              <Transition name="toolbar-pop" :css="uiPreferences.modalAnimationsEnabled">
+                <div v-if="sortOpen" class="toolbar-popover sort-popover">
+                  <button v-for="(label, key) in sortLabels" :key="key" class="sort-option" :class="{ selected: sortBy === key }" @click="sortBy = key; sortOpen = false">
+                    <span>{{ label }}</span><Check v-if="sortBy === key" :size="14" />
+                  </button>
+                </div>
+              </Transition>
+              <button class="toolbar-icon-btn" :class="{ active: hasActiveFilters || filtersOpen }" @click="filtersOpen = !filtersOpen; sortOpen = false" :aria-expanded="filtersOpen" aria-label="Фильтры задач" title="Фильтры задач">
+                <ListFilter :size="15" :stroke-width="2" />
+                <span v-if="activeFilterCount" class="filter-count-badge">{{ activeFilterCount }}</span>
+              </button>
+              <span v-if="hasActiveFilters" class="filter-summary">{{ filteredCardCount }}/{{ totalCardsCount }}</span>
+              <Transition name="toolbar-pop" :css="uiPreferences.modalAnimationsEnabled">
+                <div v-if="filtersOpen" class="toolbar-popover filter-popover" @click.stop>
+                  <div class="filter-popover-title">Фильтры задач</div>
+                  <div class="filter-quick-row">
+                    <button class="filter-chip" :class="{ active: filters.mine }" @click="toggleFilter('mine')">Мои</button>
+                    <button class="filter-chip" :class="{ active: filters.overdue }" @click="toggleFilter('overdue')">Просроченные</button>
+                  </div>
+                  <label class="filter-field"><span>Приоритет</span>
+                    <select v-model="filters.priority" class="filter-select" aria-label="Фильтр по приоритету" @change="saveFilters">
+                      <option value="">Любой</option><option value="high">Высокий</option><option value="medium">Средний</option><option value="low">Низкий</option>
+                    </select>
+                  </label>
+                  <label class="filter-field"><span>Исполнитель</span>
+                    <select v-model="filters.assignee" class="filter-select" aria-label="Фильтр по исполнителю" @change="saveFilters">
+                      <option value="">Все</option><option v-for="user in users" :key="user.id" :value="String(user.id)">{{ user.name }}</option><option value="unassigned">Не назначено</option>
+                    </select>
+                  </label>
+                  <button v-if="hasActiveFilters" class="filter-clear" @click="clearFilters">Сбросить фильтры</button>
+                </div>
+              </Transition>
+            </div>
+            <button class="btn-list-count" @click="openListModal" :title="`Список задач: ${totalCardsCount}`" :aria-label="`Список задач: ${totalCardsCount}`">
+              <ListChecks :size="14" :stroke-width="2" /><span>{{ totalCardsCount }}</span>
             </button>
-            <button class="btn-archive" @click="openArchive"><Archive :size="14" :stroke-width="2" /> Архив</button>
-            <button class="btn-add-card" @click="openCreate(null)" title="Новая задача">
+            <button class="btn-archive" @click="openArchive" title="Архив" aria-label="Архив"><Archive :size="15" :stroke-width="2" /></button>
+            <button class="btn-add-card" @click="openCreate(null)" title="Новая задача" aria-label="Новая задача">
               <Plus :size="15" :stroke-width="2.5" />
-              <span class="btn-add-label">Новая задача</span>
             </button>
           </div>
         </div>
@@ -49,9 +79,9 @@
         </div>
 
         <!-- Board -->
-        <div class="kanban-board" v-if="board.length">
+        <div class="kanban-board" :class="{ 'board-wide': uiPreferences.kanbanWide }" v-if="board.length">
           <div
-            v-for="col in board"
+            v-for="col in visibleBoard"
             :key="col.id"
             class="kanban-col"
             @dragover.prevent="onColDragOver($event, col)"
@@ -63,33 +93,41 @@
               <div class="col-dot" :style="{ background: col.color }"></div>
               <span class="col-title">{{ col.title }}</span>
               <span v-if="col.is_terminal" class="col-terminal-badge" title="Завершённые карточки из этой колонки автоматически уедут в архив"><Check :size="10" :stroke-width="3" /> авто-архив</span>
-              <span class="col-count">{{ col.cards.length }}</span>
+              <span class="col-count">{{ col.visibleCards.length }}<template v-if="hasActiveFilters"> / {{ col.cards.length }}</template></span>
               <button class="col-add-btn" @click="openCreate(col.id)" title="Добавить карточку"><Plus :size="15" :stroke-width="2.5" /></button>
             </div>
 
             <!-- Cards -->
             <div class="col-cards">
               <div v-if="dragOverInfo.colId === col.id && col.cards.length" class="drop-line" :style="{ top: dragOverInfo.y + 'px' }"></div>
-              <div v-if="!col.cards.length" class="col-empty-drop" :class="{ 'drag-over': dragOverInfo.colId === col.id }">Перетащите сюда</div>
-              <TransitionGroup name="k-card" tag="div" class="col-cards-list">
+              <TransitionGroup name="k-card" tag="div" class="col-cards-list" :css="uiPreferences.animationsEnabled" @before-leave="positionLeavingCard">
+              <div v-if="!col.visibleCards.length" :key="`empty-${col.id}`" class="col-empty-drop" :class="{ 'drag-over': dragOverInfo.colId === col.id }">{{ hasActiveFilters && col.cards.length ? 'Нет задач по фильтру' : 'Перетащите сюда' }}</div>
               <div
-                v-for="card in sortedCards(col.cards)" :key="card.id"
+                v-for="card in col.visibleCards" :key="card.id"
                 class="kanban-card"
-                :draggable="sortBy === 'manual'"
+                :draggable="sortBy === 'manual' && !hasActiveFilters"
                 @dragstart="onDragStart($event, card)"
                 @dragend="onDragEnd"
-                :class="{
-                  dragging: draggingCard?.id === card.id,
-                  'terminal-flash': !!terminalFlashIds[card.id]
-                }"
+                :class="{ dragging: draggingCard?.id === card.id }"
                 @click="openEdit(card)"
               >
-                <div v-if="terminalFlashIds[card.id]" class="terminal-done-mark" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" class="terminal-check-svg" width="20" height="20">
-                    <path class="terminal-check-path" d="M5 13l4 4L19 7" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
+                <div
+                  v-if="col.is_terminal"
+                  class="terminal-done-mark"
+                  :class="{ 'terminal-new': uiPreferences.animationsEnabled && !!terminalFlashIds[card.id] }"
+                  aria-hidden="true"
+                >
+                  <span class="terminal-done-badge">
+                    <svg viewBox="0 0 24 24" class="terminal-check-svg" width="15" height="15">
+                      <path
+                        :class="{ 'terminal-check-path': uiPreferences.animationsEnabled && !!terminalFlashIds[card.id] }"
+                        d="M5 13l4 4L19 7" fill="none" stroke="currentColor" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"
+                      />
+                    </svg>
+                    <span>Готово</span>
+                  </span>
                 </div>
-                  <div v-if="sortBy === 'manual'" class="card-drag-handle" @mousedown="dragHandleGrabbed = true" title="Потяни, чтобы переместить">
+                  <div v-if="sortBy === 'manual' && !hasActiveFilters" class="card-drag-handle" @mousedown="dragHandleGrabbed = true" title="Потяни, чтобы переместить">
                     <GripVertical :size="13" :stroke-width="2" />
                   </div>
                   <div class="card-top-row">
@@ -284,6 +322,16 @@
       @close="wsModal.open = false"
       @save="saveWorkspace"
     />
+
+    <Teleport to="body">
+      <Transition name="undo-toast">
+        <div v-if="undoToast.visible" class="kanban-undo-toast" role="status">
+          <span>{{ undoToast.message }}</span>
+          <button :disabled="undoToast.busy" @click="performUndo">{{ undoToast.busy ? 'Отменяю…' : 'Отменить' }}</button>
+          <button class="undo-dismiss" aria-label="Закрыть уведомление" @click="dismissUndo"><X :size="14" /></button>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -297,27 +345,157 @@ import Sidebar  from '@/components/Sidebar.vue'
 import MobileMenuButton from '@/components/MobileMenuButton.vue'
 import WorkspaceModal from '@/components/WorkspaceModal.vue'
 import { resolveWorkspaceIcon } from '@/lib/workspaceIcons'
+import { getApiBase } from '@/lib/apiBase'
+import { uiPreferences } from '@/composables/useUiPreferences'
 import {
   Archive, Plus, X, Check, Calendar, RotateCcw,
   LayoutDashboard, ArrowDown, ArrowRight, ArrowUp,
-  ListChecks, Copy, Download, GripVertical, Pencil
+  ListChecks, Copy, Download, GripVertical, Pencil, ListFilter, ArrowDownWideNarrow
 } from 'lucide-vue-next'
 
 const store  = useAppStore()
 const router = useRouter()
 const route  = useRoute()
-const API    = import.meta.env.VITE_API_URL || ''
+const API    = getApiBase()
 
 const board  = ref([])
 const users  = ref([])
 const workspaces = ref([])
 const activeWorkspaceId = ref(null)
 const sortBy = ref('manual') // 'manual' | 'date' | 'title' | 'priority'
+const sortLabels = { manual: 'Ручной порядок', date: 'По дате', title: 'По названию', priority: 'По приоритету' }
+function readSavedFilters() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('wv-kanban-filters') || '{}')
+    return { mine: !!saved.mine, overdue: !!saved.overdue, priority: saved.priority || '', assignee: saved.assignee || '' }
+  } catch {
+    return { mine: false, overdue: false, priority: '', assignee: '' }
+  }
+}
+const filters = reactive(readSavedFilters())
+const filtersOpen = ref(false)
+const sortOpen = ref(false)
+const filterRoot = ref(null)
+function closeToolbarMenus() { filtersOpen.value = false; sortOpen.value = false }
+function onFilterOutsidePointer(event) {
+  if (!filterRoot.value?.contains(event.target)) closeToolbarMenus()
+}
+const hasActiveFilters = computed(() => filters.mine || filters.overdue || !!filters.priority || !!filters.assignee)
+const activeFilterCount = computed(() => [filters.mine, filters.overdue, filters.priority, filters.assignee].filter(Boolean).length)
+const filteredCardCount = computed(() => visibleBoard.value.reduce((sum, col) => sum + col.visibleCards.length, 0))
+function saveFilters() {
+  localStorage.setItem('wv-kanban-filters', JSON.stringify(filters))
+}
+function toggleFilter(key) {
+  filters[key] = !filters[key]
+  saveFilters()
+}
+function clearFilters() {
+  Object.assign(filters, { mine: false, overdue: false, priority: '', assignee: '' })
+  saveFilters()
+}
+const undoToast = reactive({ visible: false, busy: false, message: '', action: null })
+let undoTimer = null
+function showUndo(message, action) {
+  clearTimeout(undoTimer)
+  Object.assign(undoToast, { visible: true, busy: false, message, action })
+  undoTimer = setTimeout(dismissUndo, 7000)
+}
+function dismissUndo() {
+  clearTimeout(undoTimer)
+  undoTimer = null
+  undoToast.visible = false
+  undoToast.action = null
+}
+async function performUndo() {
+  if (!undoToast.action || undoToast.busy) return
+  clearTimeout(undoTimer)
+  undoToast.busy = true
+  try {
+    await undoToast.action()
+    dismissUndo()
+  } catch {
+    undoToast.message = 'Не удалось отменить действие'
+    undoToast.busy = false
+    undoToast.action = null
+    undoTimer = setTimeout(dismissUndo, 3500)
+  }
+}
+function boardOrderPayload(columns) {
+  return columns.flatMap(col => col.cards.map(card => ({ id: card.id, column_id: col.id })))
+}
+async function restoreBoardSnapshot(snapshot, workspaceId) {
+  const response = await fetch(`${API}/api/kanban/cards/reorder`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspace_id: workspaceId, cards: boardOrderPayload(snapshot) })
+  })
+  if (!response.ok) throw new Error('Не удалось восстановить порядок')
+  await loadBoard()
+}
+let doneAudioContext = null
+let doneAudioCloseTimer = null
+let activeDoneVoices = []
+function playDoneSound() {
+  if (!uiPreferences.doneSoundEnabled) return
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext
+  if (!AudioContextClass) return
+
+  try {
+    if (!doneAudioContext || doneAudioContext.state === 'closed') {
+      doneAudioContext = new AudioContextClass()
+    }
+    const context = doneAudioContext
+    if (context.state === 'suspended') context.resume().catch(() => {})
+    if (doneAudioCloseTimer) clearTimeout(doneAudioCloseTimer)
+
+    const start = context.currentTime
+    activeDoneVoices.forEach(({ oscillator, gain }) => {
+      gain.gain.cancelScheduledValues(start)
+      gain.gain.setTargetAtTime(0.0001, start, 0.008)
+      try { oscillator.stop(start + 0.035) } catch { /* уже остановлен */ }
+    })
+    activeDoneVoices = []
+
+    ;[587.33, 783.99].forEach((frequency, index) => {
+      const oscillator = context.createOscillator()
+      const gain = context.createGain()
+      const noteStart = start + index * 0.11
+      oscillator.type = 'sine'
+      oscillator.frequency.setValueAtTime(frequency, noteStart)
+      gain.gain.setValueAtTime(0.0001, noteStart)
+      gain.gain.linearRampToValueAtTime(0.035, noteStart + 0.025)
+      gain.gain.exponentialRampToValueAtTime(0.0001, noteStart + 0.31)
+      oscillator.connect(gain)
+      gain.connect(context.destination)
+      oscillator.start(noteStart)
+      oscillator.stop(noteStart + 0.32)
+      activeDoneVoices.push({ oscillator, gain })
+    })
+
+    doneAudioCloseTimer = setTimeout(() => {
+      context.close().catch(() => {})
+      doneAudioContext = null
+      activeDoneVoices = []
+      doneAudioCloseTimer = null
+    }, 1200)
+  } catch {
+    // Звук необязателен: проблемы AudioContext не должны мешать переносу карточки.
+  }
+}
 const PRIORITY_RANK = { high: 0, medium: 1, low: 2 }
 
 function sortedCards(cards) {
-  if (sortBy.value === 'manual') return cards
-  const arr = [...cards]
+  let arr = cards.filter(card => {
+    if (filters.mine && Number(card.assignee_id) !== Number(store.user?.id)) return false
+    if (filters.overdue && !isOverdue(card)) return false
+    if (filters.priority && card.priority !== filters.priority) return false
+    if (filters.assignee === 'unassigned' && card.assignee_id != null) return false
+    if (filters.assignee && filters.assignee !== 'unassigned' && String(card.assignee_id) !== filters.assignee) return false
+    return true
+  })
+  if (sortBy.value === 'manual') return arr
+  arr = [...arr]
   if (sortBy.value === 'date') {
     // без даты — в конец, а не в начало (Infinity вместо 0)
     arr.sort((a, b) => (a.due_date ?? Infinity) - (b.due_date ?? Infinity))
@@ -328,6 +506,10 @@ function sortedCards(cards) {
   }
   return arr
 }
+const visibleBoard = computed(() => board.value.map(col => ({
+  ...col,
+  visibleCards: sortedCards(col.cards)
+})))
 
 // ─── Drag & Drop ─────────────────────────────────────────
 const draggingCard = ref(null)
@@ -337,16 +519,17 @@ const dragHandleGrabbed = ref(false)
 const terminalFlashIds = ref({})
 
 function flashTerminalDone(cardId) {
+  playDoneSound()
   terminalFlashIds.value = { ...terminalFlashIds.value, [cardId]: true }
   setTimeout(() => {
     const next = { ...terminalFlashIds.value }
     delete next[cardId]
     terminalFlashIds.value = next
-  }, 400)
+  }, 1100)
 }
 
 function onDragStart(e, card) {
-  if (!dragHandleGrabbed.value) { e.preventDefault(); return }
+  if (hasActiveFilters.value || !dragHandleGrabbed.value) { e.preventDefault(); return }
   draggingCard.value = card
   e.dataTransfer.effectAllowed = 'move'
   // Firefox не начнёт drag без setData — Chrome/Electron обычно и без этого работают,
@@ -364,7 +547,7 @@ function onDragEnd() {
 // сбрасывая позицию на "конец колонки" — из-за этого сортировка внутри одной
 // колонки постоянно сбивалась. Теперь просто меряем позиции карточек напрямую.
 function onColDragOver(e, col) {
-  if (!draggingCard.value || sortBy.value !== 'manual') return
+  if (!draggingCard.value || sortBy.value !== 'manual' || hasActiveFilters.value) return
   const container = e.currentTarget.querySelector('.col-cards')
   const containerRect = container.getBoundingClientRect()
   const cardEls = [...container.querySelectorAll('.kanban-card:not(.dragging)')]
@@ -396,6 +579,8 @@ async function onDrop(e, colId) {
   const card = draggingCard.value
   const targetColId = dragOverInfo.colId ?? colId
   let insertIndex = dragOverInfo.index ?? 0
+  const workspaceId = activeWorkspaceId.value
+  const snapshot = board.value.map(col => ({ ...col, cards: col.cards.map(item => ({ ...item })) }))
   draggingCard.value = null
   dragOverInfo.colId = null
   dragOverInfo.index = null
@@ -404,25 +589,55 @@ async function onDrop(e, colId) {
   // поэтому просто убираем её из старого места и вставляем в новое — без дополнительной
   // подгонки индекса.
   const sourceCol = board.value.find(c => c.cards.some(cc => cc.id === card.id))
+  const sourceIndex = sourceCol?.cards.findIndex(cc => cc.id === card.id) ?? -1
   const fromTerminal = !!sourceCol?.is_terminal
-  if (sourceCol) {
-    const sourceIdx = sourceCol.cards.findIndex(cc => cc.id === card.id)
-    sourceCol.cards.splice(sourceIdx, 1)
-  }
   const targetCol = board.value.find(c => c.id === targetColId)
+  if (!sourceCol || !targetCol) return
+  if (sourceCol.id === targetCol.id && sourceIndex === insertIndex) return
+  sourceCol.cards.splice(sourceIndex, 1)
+  insertIndex = Math.max(0, Math.min(insertIndex, targetCol.cards.length))
+  let completed = false
   if (targetCol) {
-    insertIndex = Math.max(0, Math.min(insertIndex, targetCol.cards.length))
     targetCol.cards.splice(insertIndex, 0, { ...card, column_id: targetColId })
-    if (targetCol.is_terminal && !fromTerminal) flashTerminalDone(card.id)
+    completed = targetCol.is_terminal && !fromTerminal
   }
 
-  const payload = []
-  board.value.forEach(col => col.cards.forEach(c => payload.push({ id: c.id, column_id: col.id })))
-  await fetch(`${API}/api/kanban/cards/reorder`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspace_id: activeWorkspaceId.value, cards: payload })
-  })
+  localReorderPending = true
+  localReorderSuppressUntil = Date.now() + 1200
+  boardLoadGeneration++
+  try {
+    const response = await fetch(`${API}/api/kanban/cards/reorder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace_id: workspaceId, cards: boardOrderPayload(board.value) })
+    })
+    if (!response.ok) throw new Error('Не удалось переместить задачу')
+  } catch {
+    localReorderPending = false
+    await loadBoard()
+    return
+  }
+  localReorderPending = false
+  localReorderSuppressUntil = Date.now() + 700
+  if (completed) flashTerminalDone(card.id)
+  showUndo('Задача перемещена', () => restoreBoardSnapshot(snapshot, workspaceId))
+}
+function positionLeavingCard(element) {
+  const parent = element.parentElement
+  if (!parent) return
+  const rect = element.getBoundingClientRect()
+  const parentRect = parent.getBoundingClientRect()
+  element.style.top = `${rect.top - parentRect.top + parent.scrollTop}px`
+  element.style.left = `${rect.left - parentRect.left + parent.scrollLeft}px`
+  element.style.width = `${rect.width}px`
+}
+function sameVisibleBoard(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+  const signature = columns => JSON.stringify(columns.map(column => [
+    column.id,
+    (column.cards || []).map(({ position, ...card }) => card)
+  ]))
+  return signature(left) === signature(right)
 }
 
 // ─── Modal ────────────────────────────────────────────────
@@ -495,13 +710,25 @@ async function deleteCard() {
 }
 
 async function archiveCard() {
-  await fetch(`${API}/api/kanban/cards/${modal.id}/archive`, {
+  const cardId = modal.id
+  const workspaceId = activeWorkspaceId.value
+  const response = await fetch(`${API}/api/kanban/cards/${cardId}/archive`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspace_id: activeWorkspaceId.value })
+    body: JSON.stringify({ workspace_id: workspaceId })
   })
-  closeModal()
+  if (!response.ok) return
+  modal.open = false
   await loadBoard()
+  showUndo('Задача в архиве', async () => {
+    const restored = await fetch(`${API}/api/kanban/cards/${cardId}/unarchive`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace_id: workspaceId })
+    })
+    if (!restored.ok) throw new Error('Не удалось восстановить задачу')
+    await loadBoard()
+  })
 }
 
 // ─── Archive modal ──────────────────────────────────────────
@@ -517,12 +744,23 @@ async function loadArchive() {
   archivedCards.value = await r.json()
 }
 async function restoreCard(card) {
-  await fetch(`${API}/api/kanban/cards/${card.id}/unarchive`, {
+  const workspaceId = activeWorkspaceId.value
+  const response = await fetch(`${API}/api/kanban/cards/${card.id}/unarchive`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspace_id: activeWorkspaceId.value })
+    body: JSON.stringify({ workspace_id: workspaceId })
   })
+  if (!response.ok) return
   await Promise.all([loadArchive(), loadBoard()])
+  showUndo('Задача восстановлена из архива', async () => {
+    const archived = await fetch(`${API}/api/kanban/cards/${card.id}/archive`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace_id: workspaceId })
+    })
+    if (!archived.ok) throw new Error('Не удалось вернуть задачу в архив')
+    await Promise.all([loadArchive(), loadBoard()])
+  })
 }
 
 // ─── List export/import ─────────────────────────────────────
@@ -653,9 +891,15 @@ async function removeWorkspace(ws) {
 }
 
 // ─── Data ─────────────────────────────────────────────────
+let boardLoadGeneration = 0
+let localReorderPending = false
+let localReorderSuppressUntil = 0
 async function loadBoard() {
-  const r = await fetch(`${API}/api/kanban?workspace_id=${activeWorkspaceId.value}`)
-  board.value = await r.json()
+  const generation = ++boardLoadGeneration
+  const workspaceId = activeWorkspaceId.value
+  const r = await fetch(`${API}/api/kanban?workspace_id=${workspaceId}`)
+  const nextBoard = await r.json()
+  if (generation === boardLoadGeneration && !localReorderPending && workspaceId === activeWorkspaceId.value) board.value = nextBoard
 }
 
 function priorityLabel(p) {
@@ -675,6 +919,7 @@ function isOverdue(card) {
 let offKanban, offWs
 function resetDragHandle() { dragHandleGrabbed.value = false }
 onMounted(async () => {
+  document.addEventListener('pointerdown', onFilterOutsidePointer)
   if (!store.user) { router.push('/'); return }
   if (!store.folders.length) await store.fetchFolders()
   await loadWorkspaces()
@@ -696,6 +941,9 @@ onMounted(async () => {
     socket.on('kanban:update', (payload) => {
       // payload может прийти без board (после автоархива) — просто перезагружаем
       if (!payload || payload.workspace_id === activeWorkspaceId.value || payload.workspace_id == null) {
+        // reorder уже применён локально; не заменяем карточки новыми объектами из эха сервера.
+        if (payload?.board && sameVisibleBoard(board.value, payload.board)) return
+        if (localReorderPending || Date.now() < localReorderSuppressUntil) return
         loadBoard()
       }
     })
@@ -704,7 +952,15 @@ onMounted(async () => {
     offWs = () => socket.off('kanban:workspaces:update')
   }
 })
-onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseup', resetDragHandle) })
+onUnmounted(() => {
+  offKanban?.()
+  offWs?.()
+  window.removeEventListener('mouseup', resetDragHandle)
+  document.removeEventListener('pointerdown', onFilterOutsidePointer)
+  clearTimeout(undoTimer)
+  if (doneAudioCloseTimer) clearTimeout(doneAudioCloseTimer)
+  if (doneAudioContext?.state !== 'closed') doneAudioContext?.close().catch(() => {})
+})
 </script>
 
 <style scoped>
@@ -737,19 +993,20 @@ onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseu
 
 /* ── Header ── */
 .kanban-header {
-  position: relative; z-index: 1;
+  position: relative; z-index: 5;
   display: flex; align-items: center; justify-content: space-between;
   padding: 14px 20px 12px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 .kanban-header-left { display: flex; align-items: center; gap: 10px; }
-.kanban-header-right { display: flex; align-items: center; gap: 8px; }
+.kanban-header-right { display: flex; align-items: center; gap: 6px; }
+.kanban-tools { position: relative; display: flex; align-items: center; gap: 5px; }
 .kanban-icon { color: var(--accent); flex-shrink: 0; }
 .kanban-title { font-size: var(--text-lg); font-weight: 700; color: var(--text); }
 .btn-add-card {
-  display: flex; align-items: center; gap: 6px;
-  padding: 7px 14px;
+  display: flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; padding: 0;
   background: var(--accent); color: #fff;
   border-radius: var(--radius-md);
   font-size: var(--text-sm); font-weight: 600;
@@ -757,17 +1014,29 @@ onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseu
 }
 .btn-add-card:hover { background: var(--accent-hover); }
 .btn-add-label { white-space: nowrap; }
-.sort-select {
-  padding: 7px 10px; border-radius: var(--radius-md);
-  font-size: var(--text-sm); font-weight: 600;
+.toolbar-icon-btn {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; flex: 0 0 34px; padding: 0;
+  border: 1px solid var(--border); border-radius: var(--radius-md);
   background: var(--surface-3); color: var(--text-muted);
-  border: 1px solid var(--border);
-  cursor: pointer;
+  transition: all var(--transition);
 }
+.toolbar-icon-btn:hover, .toolbar-icon-btn.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+.toolbar-popover {
+  position: absolute; top: calc(100% + 7px); right: 0; z-index: 30;
+  min-width: 190px; padding: 6px;
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--surface); box-shadow: var(--shadow-lg);
+}
+.sort-popover { display: flex; flex-direction: column; }
+.sort-option { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 8px 9px; border-radius: var(--radius-md); color: var(--text-muted); font-size: var(--text-xs); text-align: left; }
+.sort-option:hover, .sort-option.selected { background: var(--accent-soft); color: var(--accent); }
+.toolbar-pop-enter-active, .toolbar-pop-leave-active { transition: opacity .16s ease, transform .16s ease; }
+.toolbar-pop-enter-from, .toolbar-pop-leave-to { opacity: 0; transform: translateY(-4px) scale(.98); }
 .btn-archive {
-  display: flex; align-items: center; gap: 6px;
-  padding: 7px 14px; border-radius: var(--radius-md);
-  font-size: var(--text-sm); font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; padding: 0; border-radius: var(--radius-md);
+  font-size: var(--text-xs); font-weight: 600;
   background: var(--surface-3); color: var(--text-muted);
   border: 1px solid var(--border);
   transition: all var(--transition);
@@ -775,9 +1044,9 @@ onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseu
 .btn-archive:hover { background: var(--hover); color: var(--text); }
 
 .btn-list-count {
-  display: flex; align-items: center; gap: 6px;
-  padding: 7px 12px; border-radius: var(--radius-md);
-  font-size: var(--text-sm); font-weight: 700;
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  min-width: 42px; height: 34px; padding: 0 6px; border-radius: var(--radius-md);
+  font-size: var(--text-xs); font-weight: 700;
   background: var(--surface-3); color: var(--text-muted);
   border: 1px solid var(--border);
   transition: all var(--transition);
@@ -818,6 +1087,39 @@ onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseu
 .ws-tab-del:hover { opacity: 1; color: #e06c75; }
 .ws-tab-add { font-size: 14px; font-weight: 700; padding: 6px 10px; }
 
+.filter-popover { width: min(270px, calc(100vw - 28px)); padding: 13px; display: flex; flex-direction: column; gap: 10px; }
+.filter-count-badge {
+  position: absolute; top: -5px; right: -5px;
+  min-width: 15px; height: 15px; padding: 0 3px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 999px; background: var(--accent); color: #fff;
+  font-size: 9px; font-weight: 700; line-height: 1;
+}
+.filter-summary { color: var(--text-faint); font-size: 11px; }
+.filter-popover-title { color: var(--text); font-size: var(--text-xs); font-weight: 700; }
+.filter-quick-row { display: flex; gap: 6px; }
+.filter-chip {
+  height: 27px; padding: 0 9px; flex-shrink: 0;
+  border: 1px solid var(--border); border-radius: var(--radius-full);
+  background: var(--surface-2); color: var(--text-muted);
+  font-size: 11px; font-weight: 600;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+.filter-select {
+  border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text-muted);
+  font-size: var(--text-xs); font-weight: 600;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+.filter-chip:hover,
+.filter-chip.active {
+  background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line);
+}
+.filter-field { display: grid; grid-template-columns: 82px 1fr; align-items: center; gap: 8px; color: var(--text-muted); font-size: var(--text-xs); }
+.filter-select { width: 100%; height: 30px; padding: 0 8px; border-radius: var(--radius-md); cursor: pointer; }
+.filter-clear { align-self: flex-start; padding: 2px 0; color: var(--text-faint); font-size: var(--text-xs); white-space: nowrap; }
+.filter-clear:hover { color: var(--text); }
+
 /* ── Board ── */
 .kanban-board {
   position: relative; z-index: 1;
@@ -828,6 +1130,12 @@ onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseu
   align-items: stretch;
 }
 .kanban-board::-webkit-scrollbar { height: 6px; } /* горизонтальный скролл толще — легче ухватить */
+.kanban-board.board-wide { gap: 12px; }
+.kanban-board.board-wide .kanban-col {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 240px;
+}
 
 /* ── Column ── */
 .kanban-col {
@@ -885,16 +1193,14 @@ onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseu
   border-radius: var(--radius-md);
   padding: 10px 30px 10px 12px;
   cursor: pointer;
-  transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease;
+  transition: box-shadow .18s ease, border-color .18s ease;
   user-select: none;
-  will-change: transform;
 }
 .kanban-card:hover {
   box-shadow: var(--shadow-md);
   border-color: var(--accent-line);
-  transform: translateY(-2px);
 }
-.kanban-card:active { transform: translateY(0) scale(.99); }
+.kanban-card:active { opacity: .92; }
 .kanban-card.dragging { opacity: .4; transform: scale(.97); transition: none; }
 
 .card-drag-handle {
@@ -944,25 +1250,80 @@ onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseu
 .card-progress-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width .3s ease; }
 
 .col-cards-list { display: flex; flex-direction: column; gap: 8px; position: relative; }
-.k-card-move { transition: transform .25s ease; }
+.k-card-move {
+  transition: transform .36s cubic-bezier(.2,.75,.25,1);
+  will-change: transform;
+}
+.k-card-enter-active,
+.k-card-leave-active { transition: opacity .2s ease, transform .2s ease; }
+.k-card-enter-active { transition: opacity .24s ease, transform .24s cubic-bezier(.2,.75,.25,1); }
+.k-card-leave-active {
+  position: absolute;
+  pointer-events: none;
+}
+.col-empty-drop.k-card-enter-active,
+.col-empty-drop.k-card-leave-active { transition: opacity .22s ease, transform .22s ease; }
+.col-empty-drop.k-card-enter-from,
+.col-empty-drop.k-card-leave-to { opacity: 0; transform: translateY(5px); }
+.k-card-enter-from { opacity: 0; transform: translateY(5px) scale(.99); }
+.k-card-leave-to { opacity: 0; transform: translateY(-3px) scale(.985); }
 
-.kanban-card.terminal-flash {
-  animation: terminalPulse .35s ease;
-}
-@keyframes terminalPulse {
-  0%, 100% { box-shadow: none; border-color: var(--border); }
-  45% { box-shadow: 0 0 0 3px var(--accent-soft); border-color: var(--accent); }
-}
 .terminal-done-mark {
-  position: absolute; top: 6px; left: 8px;
-  color: var(--green); pointer-events: none; z-index: 2;
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  border: 1px solid color-mix(in srgb, var(--green) 32%, var(--border));
+  border-radius: inherit;
+  background: linear-gradient(125deg, transparent 55%, color-mix(in srgb, var(--green) 5%, transparent));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 7%, transparent);
+  pointer-events: none;
+}
+.terminal-done-mark.terminal-new {
+  animation: terminalOverlayIn .72s ease both, terminalOutlinePulse .85s ease both;
+}
+.terminal-done-badge {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px 4px 5px;
+  border: 1px solid color-mix(in srgb, var(--green) 25%, var(--border));
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--green);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .12);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+.terminal-new .terminal-done-badge {
+  animation: terminalBadgeIn .52s cubic-bezier(.2,.8,.2,1) both;
+}
+@keyframes terminalOverlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes terminalOutlinePulse {
+  0%, 100% { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 7%, transparent); }
+  40% { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--green) 24%, transparent), 0 0 0 2px color-mix(in srgb, var(--green) 14%, transparent); }
+}
+@keyframes terminalBadgeIn {
+  from { opacity: 0; transform: translateY(-3px) scale(.94); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 .terminal-check-path {
-  stroke-dasharray: 24;
-  stroke-dashoffset: 24;
-  animation: terminalCheckDraw .32s ease forwards .06s;
+  stroke-dasharray: 22;
+  stroke-dashoffset: 22;
+  animation: terminalCheckDraw .4s ease forwards .12s;
 }
 @keyframes terminalCheckDraw { to { stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .terminal-done-mark,
+  .terminal-done-badge,
+  .terminal-check-path { animation-duration: .01ms; animation-delay: 0ms; }
+}
 .card-progress-label { font-size: 10px; font-weight: 700; color: var(--text-faint); }
 
 .card-footer { margin-top: 8px; }
@@ -1136,22 +1497,20 @@ onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseu
     gap: 6px;
     flex-wrap: nowrap;
   }
-  .sort-select,
   .btn-archive,
+  .btn-list-count,
   .btn-add-card {
     height: 36px;
     box-sizing: border-box;
   }
-  .sort-select { flex: 1; min-width: 0; padding: 0 10px; }
-  .btn-archive { flex-shrink: 0; padding: 0 12px; }
+  .toolbar-icon-btn { width: 36px; height: 36px; flex-basis: 36px; }
+  .btn-archive,
+  .btn-add-card { flex: 0 0 36px; width: 36px; padding: 0; }
+  .btn-list-count { min-width: 42px; padding: 0 4px; }
   .btn-add-card {
-    flex-shrink: 0;
-    width: 36px;
-    padding: 0;
     justify-content: center;
     gap: 0;
   }
-  .btn-add-label { display: none; }
 
   .ws-tabs { padding: 10px 12px; gap: 8px; }
   .ws-tab {
@@ -1160,8 +1519,16 @@ onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseu
   }
   .ws-tab-add { padding: 10px 14px; }
 
+  .filter-popover { right: 0; }
+
   .kanban-board { padding: 12px; gap: 12px; }
+  .kanban-board.board-wide { gap: 12px; }
   .kanban-col {
+    width: min(280px, calc(100vw - 48px));
+    min-width: min(280px, calc(100vw - 48px));
+  }
+  .kanban-board.board-wide .kanban-col {
+    flex: 0 0 min(280px, calc(100vw - 48px));
     width: min(280px, calc(100vw - 48px));
     min-width: min(280px, calc(100vw - 48px));
   }
@@ -1170,5 +1537,35 @@ onUnmounted(() => { offKanban?.(); offWs?.(); window.removeEventListener('mouseu
   .field-row { grid-template-columns: 1fr; }
   .modal-footer { flex-direction: column; align-items: stretch; gap: 10px; }
   .modal-footer-right { justify-content: flex-end; }
+}
+
+.kanban-undo-toast {
+  position: fixed; z-index: 1200;
+  right: 24px; bottom: 24px;
+  display: flex; align-items: center; gap: 14px;
+  max-width: min(460px, calc(100vw - 32px));
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--text-sm);
+}
+.kanban-undo-toast > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kanban-undo-toast > button:not(.undo-dismiss) {
+  padding: 6px 9px; border-radius: var(--radius-md);
+  background: var(--accent-soft); color: var(--accent);
+  font-size: var(--text-xs); font-weight: 700; white-space: nowrap;
+}
+.kanban-undo-toast > button:disabled { opacity: .6; }
+.kanban-undo-toast .undo-dismiss { display: flex; color: var(--text-faint); }
+.kanban-undo-toast .undo-dismiss:hover { color: var(--text); }
+.undo-toast-enter-active,
+.undo-toast-leave-active { transition: opacity .18s ease, transform .18s ease; }
+.undo-toast-enter-from,
+.undo-toast-leave-to { opacity: 0; transform: translateY(8px); }
+@media (max-width: 600px) {
+  .kanban-undo-toast { right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); }
 }
 </style>

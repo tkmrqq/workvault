@@ -425,3 +425,20 @@ select {
     font-size: 16px !important;
   }
 }
+
+/* A single preference can disable motion in modal layers and popovers. */
+:root[data-modal-animations="false"] .modal-overlay,
+:root[data-modal-animations="false"] .modal-overlay *,
+:root[data-modal-animations="false"] .overlay,
+:root[data-modal-animations="false"] .overlay *,
+:root[data-modal-animations="false"] .confirm-overlay,
+:root[data-modal-animations="false"] .confirm-overlay *,
+:root[data-modal-animations="false"] .cp-overlay,
+:root[data-modal-animations="false"] .cp-overlay *,
+:root[data-modal-animations="false"] .md-fs-overlay,
+:root[data-modal-animations="false"] .md-fs-overlay *,
+:root[data-modal-animations="false"] .toolbar-popover,
+:root[data-modal-animations="false"] .toolbar-popover * {
+  animation: none !important;
+  transition: none !important;
+}
