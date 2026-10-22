@@ -1,16 +1,25 @@
 const { app, BrowserWindow, Notification, ipcMain, shell, dialog } = require('electron')
-const path  = require('path')
-const fs    = require('fs')
+const path = require('path')
+const fs = require('fs')
 const https = require('https')
-const http  = require('http')
+const http = require('http')
 const { autoUpdater } = require('electron-updater')
+const { resolveServerUrl } = require('./serverUrl')
 
 const isDev = !app.isPackaged
-const SERVER_URL = isDev
-  ? 'http://localhost:3000'
-  : 'http://172.16.99.37:3000'
+let SERVER_URL = resolveServerUrl()
 
 let mainWindow
+
+function trustedServerUrl(url) {
+  try {
+    const u = new URL(url)
+    const s = new URL(SERVER_URL)
+    if (u.hostname === s.hostname) return true
+    if (['localhost', '127.0.0.1', 'workvault.local'].includes(u.hostname)) return true
+  } catch { /* ignore malformed */ }
+  return false
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -60,9 +69,10 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  SERVER_URL = resolveServerUrl()
   autoUpdater.setFeedURL({
     provider: 'generic',
-    url: 'http://172.16.99.37:3000/downloads/'
+    url: `${SERVER_URL.replace(/\/$/, '')}/downloads/`
   })
 
   createWindow()
@@ -83,17 +93,29 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
+// Самоподписанный сертификат nginx на LAN — доверяем только нашему серверу (https)
+app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
+  if (trustedServerUrl(url)) {
+    event.preventDefault()
+    callback(true)
+  } else {
+    callback(false)
+  }
+})
+
+
+
 ipcMain.handle('notify', (_, { title, body }) => {
   if (Notification.isSupported()) new Notification({ title, body, silent: false }).show()
 })
 ipcMain.handle('win:minimize', () => mainWindow?.minimize())
 ipcMain.handle('win:maximize', () => mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize())
-ipcMain.handle('win:close',    () => mainWindow?.close())
+ipcMain.handle('win:close', () => mainWindow?.close())
 
 ipcMain.handle('update:install', () => { autoUpdater.quitAndInstall() })
 
 ipcMain.handle('download:file', async (_, { url, filename }) => {
-  const ext     = path.extname(filename)
+  const ext = path.extname(filename)
   const filters = []
   if (ext) filters.push({ name: `${ext.slice(1).toUpperCase()} файл`, extensions: [ext.slice(1)] })
   filters.push({ name: 'Все файлы', extensions: ['*'] })
@@ -107,8 +129,8 @@ ipcMain.handle('download:file', async (_, { url, filename }) => {
   if (canceled || !filePath) return { ok: false, reason: 'cancelled' }
 
   const savePath = ext && !filePath.endsWith(ext) ? filePath + ext : filePath
-  const fullUrl  = url.startsWith('http') ? url : `${SERVER_URL}${url}`
-  const proto    = fullUrl.startsWith('https') ? https : http
+  const fullUrl = url.startsWith('http') ? url : `${SERVER_URL}${url}`
+  const proto = fullUrl.startsWith('https') ? https : http
 
   return new Promise((resolve) => {
     const file = fs.createWriteStream(savePath)
@@ -116,7 +138,7 @@ ipcMain.handle('download:file', async (_, { url, filename }) => {
       res.pipe(file)
       file.on('finish', () => { file.close(); resolve({ ok: true, filePath: savePath }) })
     }).on('error', (err) => {
-      fs.unlink(savePath, () => {})
+      fs.unlink(savePath, () => { })
       resolve({ ok: false, reason: err.message })
     })
   })

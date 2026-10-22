@@ -110,7 +110,7 @@ function renderAdminPage({ stats, users, channels, workspaces, log, me }) {
       ${workspaces.map(w => `
         <tr>
           <td><span class="badge">${w.id}</span></td>
-          <td>${w.icon} ${w.name}</td>
+          <td>${w.name}</td>
           <td>${w.col_count}</td>
           <td>${w.card_count}</td>
           <td>

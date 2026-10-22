@@ -132,6 +132,7 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
+import { getApiBase } from '@/lib/apiBase'
 import { confirmDialog } from '@/composables/useConfirm'
 import {
   X, Calendar, Palette, Smile, Paintbrush,
@@ -179,7 +180,7 @@ async function save() {
   if (!form.name?.trim() || saving.value) return
   saving.value = true
   try {
-    const API = import.meta.env.VITE_API_URL || ''
+    const API = getApiBase()
     const res = await fetch(`${API}/api/users/${props.user.id}`, {
       method:  'PATCH',
       headers: { 'Content-Type': 'application/json' },

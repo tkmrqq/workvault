@@ -222,13 +222,31 @@ async function send() {
     uploading.value = true
     try {
       attachment = await store.uploadFile(pendingFile.value._file)
+    } catch {
+      fileError.value = 'Не удалось загрузить файл'
+      setTimeout(() => fileError.value = '', 4000)
+      uploading.value = false
+      // Восстанавливаем текст — раз файл не улетел, всё сообщение не отправлено
+      text.value = msgText
+      await nextTick(); autoResize()
+      return
     } finally {
       clearFile()
       uploading.value = false
     }
   }
 
-  await store.sendMessage({ text: msgText || null, attachment, linkMeta: meta })
+  try {
+    await store.sendMessage({ text: msgText || null, attachment, linkMeta: meta })
+  } catch (e) {
+    // Сообщение реально не сохранилось на сервере — не даём тексту молча
+    // пропасть: возвращаем его в поле и показываем причину
+    fileError.value = e.message || 'Не удалось отправить сообщение'
+    setTimeout(() => fileError.value = '', 5000)
+    text.value = msgText
+    await nextTick(); autoResize()
+    return
+  }
   taRef.value?.focus()
 }
 </script>

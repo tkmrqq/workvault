@@ -1,5 +1,5 @@
 <template>
-  <div class="msg-wrap" :class="{ own: isOwn }">
+  <div class="msg-wrap" :class="{ own: isOwn, 'msg-enter': uiPreferences.animationsEnabled && store.isMessageEntering(msg.id) }">
     <div class="msg-avatar"
       :style="{ background: msg.user_color + '22', color: msg.user_color }"
       @click="openProfile(msg.user_id)"
@@ -103,6 +103,8 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useAppStore } from '@/stores/app'
+import { getApiBase } from '@/lib/apiBase'
+import { uiPreferences } from '@/composables/useUiPreferences'
 import ProfileModal from './ProfileModal.vue'
 import {
   Download, SmilePlus, Pencil, Trash2,
@@ -135,7 +137,7 @@ const showPicker = ref(false)
 
 const EMOJIS = ['👍','❤️','🔥','😂','👀','✅','😮','🤔','👏','💯']
 
-const API = import.meta.env.VITE_API_URL || ''
+const API = getApiBase()
 
 function resolveUrl(url) {
   if (!url) return ''
@@ -247,7 +249,13 @@ function pick(emoji) { store.toggleReaction(props.msg.id, emoji); showPicker.val
   padding: var(--space-2) var(--space-5);
   border-radius: var(--radius-lg); position: relative;
   transition: background var(--transition);
-  animation: fadeUp .2s ease both;
+}
+.msg-wrap.msg-enter {
+  animation: msgArrive .15s ease both;
+}
+@keyframes msgArrive {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .msg-wrap:hover { background: var(--surface); }
 .msg-wrap:hover .msg-actions { opacity: 1; pointer-events: all; }

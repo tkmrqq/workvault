@@ -20,7 +20,11 @@ const {
 const app = express()
 const server = http.createServer(app)
 const io = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST'], credentials: true }
+  // origin:'*' вместе с credentials:true — невалидная по спеке комбинация
+  // (в отличие от обычного REST-cors чуть ниже, тут раньше стояло именно
+  // так). Приводим к тому же виду: true отражает реальный Origin запроса,
+  // а не буквальную звёздочку.
+  cors: { origin: true, methods: ['GET', 'POST'], credentials: true }
 })
 
 // За nginx — без этого req.ip показывал бы IP самого nginx-контейнера для
@@ -44,7 +48,7 @@ const storage = multer.diskStorage({
 })
 
 const ALLOWED_MIME = /^(image\/(jpeg|jpg|png|gif|webp)|video\/(mp4|webm|quicktime|x-matroska)|application\/(pdf|zip|x-zip-compressed|msword|vnd\.openxmlformats-officedocument\.wordprocessingml\.document)|text\/plain)$/
-const ALLOWED_EXT  = /\.(jpg|jpeg|png|gif|webp|mp4|webm|mov|mkv|pdf|zip|txt|doc|docx)$/i
+const ALLOWED_EXT = /\.(jpg|jpeg|png|gif|webp|mp4|webm|mov|mkv|pdf|zip|txt|doc|docx)$/i
 
 const upload = multer({
   storage,
@@ -56,7 +60,7 @@ const upload = multer({
       return cb(new Error('Папки не поддерживаются'), false)
     }
     const mimeOk = ALLOWED_MIME.test(file.mimetype)
-    const extOk  = ALLOWED_EXT.test(path.extname(file.originalname).toLowerCase())
+    const extOk = ALLOWED_EXT.test(path.extname(file.originalname).toLowerCase())
     if (!mimeOk && !extOk) {
       return cb(new Error(`Тип файла не поддерживается: ${file.mimetype}`), false)
     }
@@ -240,7 +244,7 @@ app.get('/api/messages/:channelId', (req, res) => {
     )
     res.json({
       messages: messages.map(withReactions),
-      hasMore:  messages.length === limit
+      hasMore: messages.length === limit
     })
   } catch (e) {
     console.error('getMessages error:', e)
@@ -252,10 +256,10 @@ app.get('/api/messages/:channelId', (req, res) => {
 app.post('/api/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Файл не получен' })
   res.json({
-    url:     `/uploads/${req.file.filename}`,
-    name:    req.file.originalname,
-    size:    req.file.size,
-    mime:    req.file.mimetype,
+    url: `/uploads/${req.file.filename}`,
+    name: req.file.originalname,
+    size: req.file.size,
+    mime: req.file.mimetype,
     isImage: req.file.mimetype.startsWith('image/')
   })
 })
@@ -270,10 +274,10 @@ app.post('/api/unfurl', async (req, res) => {
     const d = result.result
     res.json({
       url,
-      title:       d.ogTitle       || d.twitterTitle              || '',
-      description: d.ogDescription || d.twitterDescription        || '',
-      image:       d.ogImage?.[0]?.url || d.twitterImage?.[0]?.url || '',
-      siteName:    d.ogSiteName    || new URL(url).hostname
+      title: d.ogTitle || d.twitterTitle || '',
+      description: d.ogDescription || d.twitterDescription || '',
+      image: d.ogImage?.[0]?.url || d.twitterImage?.[0]?.url || '',
+      siteName: d.ogSiteName || new URL(url).hostname
     })
   } catch {
     res.json({ url })
@@ -296,9 +300,9 @@ app.get('/api/kanban/workspaces', (_, res) => {
 })
 
 app.post('/api/kanban/workspaces', (req, res) => {
-  const { name, icon } = req.body
+  const { name, icon, color } = req.body
   if (!name?.trim()) return res.status(400).json({ error: 'Название обязательно' })
-  const ws = db.kanban.createWorkspace(name.trim(), icon)
+  const ws = db.kanban.createWorkspace(name.trim(), icon, color)
   io.emit('kanban:workspaces:update')
   res.json(ws)
 })
@@ -342,6 +346,18 @@ app.patch('/api/kanban/cards/:id', (req, res) => {
   const card = db.kanban.updateCard(req.params.id, rest)
   emitBoardUpdate(workspace_id)
   res.json(card)
+})
+
+app.post('/api/kanban/cards/:id/move', (req, res) => {
+  const { column_id } = req.body
+  if (!column_id) return res.status(400).json({ error: 'column_id обязателен' })
+  const result = db.kanban.moveCardToColumn(req.params.id, column_id)
+  if (!result) return res.status(404).json({ error: 'Карточка не найдена' })
+  // Если перенесли в другую рабочую зону — у обеих досок (и старой, и новой)
+  // должно обновиться содержимое для всех, кто сейчас на них смотрит
+  emitBoardUpdate(result.oldWorkspaceId)
+  if (result.newWorkspaceId !== result.oldWorkspaceId) emitBoardUpdate(result.newWorkspaceId)
+  res.json(result.card)
 })
 
 app.post('/api/kanban/cards/reorder', (req, res) => {
@@ -443,12 +459,36 @@ app.delete('/api/kanban/subtasks/:id/tags/:tagId', (req, res) => {
 // клиенту вообще не нужно ничего слать, cookie летит автоматически.
 io.use((socket, next) => {
   try {
-    const cookies = cookie.parse(socket.handshake.headers.cookie || '')
-    const payload = cookies.access_token && verifyAccessToken(cookies.access_token)
-    if (!payload) return next(new Error('unauthorized'))
+    const rawCookieHeader = socket.handshake.headers.cookie || ''
+    // cookie@2 exposes parseCookie(); parse() existed in older major versions.
+    const parseCookies = cookie.parseCookie || cookie.parse
+    if (typeof parseCookies !== 'function') {
+      throw new Error('cookie package does not expose a cookie parser')
+    }
+    const cookies = parseCookies(rawCookieHeader)
+    if (!cookies.access_token) {
+      // Кука вообще не долетела до сервера — не проблема самого токена,
+      // а проблема транспорта/CORS/secure-флага. Печатаем origin запроса,
+      // чтобы сразу было видно, с какого адреса реально пришёл хендшейк.
+      console.warn(
+        `[socket auth] нет access_token в куках хендшейка. ` +
+        `Origin: ${socket.handshake.headers.origin || '—'}, ` +
+        `есть ли Cookie-заголовок вообще: ${rawCookieHeader ? 'да, но без access_token' : 'нет совсем'}`
+      )
+      return next(new Error('unauthorized'))
+    }
+    const payload = verifyAccessToken(cookies.access_token)
+    if (!payload) {
+      // Кука долетела, но verify не прошёл — почти всегда просто истёк
+      // access_token (живёт 15 мин) и клиент ещё не успел обновить его
+      // через /api/auth/refresh
+      console.warn('[socket auth] access_token есть, но не прошёл verify (истёк или подписан другим JWT_SECRET)')
+      return next(new Error('unauthorized'))
+    }
     socket.user = { id: payload.sub, name: payload.name, role: payload.role }
     next()
   } catch (e) {
+    console.warn('[socket auth] исключение при разборе куки:', e.message)
     next(new Error('unauthorized'))
   }
 })
@@ -477,21 +517,30 @@ io.on('connection', (socket) => {
   // в БД пишем через JSON.stringify, из БД читаем через getMessages (парсит сам)
   // userId больше не берём из тела события — только из проверенного socket.user,
   // иначе любой клиент мог отправить сообщение "от имени" произвольного userId.
-  socket.on('message:send', ({ channelId, text, attachment, linkMeta }) => {
+  // ack — необязательный callback, если клиент его передал (io.emit с колбэком
+  // на клиенте). Так фронт узнаёт результат отправки напрямую по этому конкретному
+  // сообщению, а не гадает по общему socket.on('error') (который раньше вообще
+  // никто не слушал — сообщение просто пропадало без следа при любой ошибке).
+  socket.on('message:send', ({ channelId, text, attachment, linkMeta }, ack) => {
     try {
       const type = attachment ? (attachment.isImage ? 'image' : 'file') : 'text'
       const result = db.createMessage(
         channelId, socket.user.id, text || null, type,
         attachment ? JSON.stringify(attachment) : null,
-        linkMeta   ? JSON.stringify(linkMeta)   : null
+        linkMeta ? JSON.stringify(linkMeta) : null
       )
       // getMessages парсит JSON — берём последнее сообщение по id
       const msgs = db.getMessages(channelId, 1)
-      const msg  = msgs.find(m => m.id === result.lastInsertRowid)
-      if (!msg) return
+      const msg = msgs.find(m => m.id === result.lastInsertRowid)
+      if (!msg) {
+        ack?.({ ok: false, error: 'Сообщение не найдено после сохранения' })
+        return
+      }
       io.to(`channel:${channelId}`).emit('message:new', withReactions(msg))
+      ack?.({ ok: true, id: msg.id })
     } catch (e) {
       console.error('message:send error:', e)
+      ack?.({ ok: false, error: e.message })
       socket.emit('error', e.message)
     }
   })
@@ -556,8 +605,8 @@ app.patch('/api/users/:id', (req, res) => {
         banner      = COALESCE(?, banner)
       WHERE id = ?
     `).run(name || null, avatar || null, color || null,
-           description !== undefined ? description : null,
-           banner || null, req.params.id)
+      description !== undefined ? description : null,
+      banner || null, req.params.id)
     res.json(db.getUserById(req.params.id))
   } catch (e) {
     res.status(500).json({ error: e.message })

@@ -200,11 +200,12 @@
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
+import { getApiBase } from '@/lib/apiBase'
 import { ChevronRight, Plus, ArrowLeft, ArrowRight } from 'lucide-vue-next'
 
 const store  = useAppStore()
 const router = useRouter()
-const API    = import.meta.env.VITE_API_URL || ''
+const API    = getApiBase()
 
 const step         = ref('pick') // pick | password | setpassword | create | createpassword
 const mounted      = ref(false)

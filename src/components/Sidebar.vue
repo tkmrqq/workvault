@@ -14,7 +14,7 @@
         <circle cx="16" cy="16" r="3.2" fill="var(--accent)" opacity=".9"/>
       </svg>
       <span class="app-name">WorkVault</span>
-      <button class="icon-btn" @click="showEdit = true" title="Управление каналами"><Settings :size="15" :stroke-width="2" /></button>
+      <button class="icon-btn" @click="showEdit = true" title="Настройки"><Settings :size="15" :stroke-width="2" /></button>
       <button class="icon-btn" @click="store.toggleTheme()" title="Тема">
         <Sun v-if="store.theme === 'dark'" :size="15" :stroke-width="2" />
         <Moon v-else :size="15" :stroke-width="2" />
