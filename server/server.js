@@ -252,6 +252,50 @@ app.get('/api/messages/:channelId', (req, res) => {
   }
 })
 
+// ─── СООБЩЕНИЕ → ЗАДАЧА ───────────────────────────────────
+// Одна задача на сообщение: повторный вызов вернёт уже созданную.
+function taskTitleFromMessage(msg) {
+  const firstLine = (msg.text || '').split('\n').map(l => l.trim()).find(Boolean)
+  if (firstLine) return firstLine.length > 120 ? firstLine.slice(0, 117) + '…' : firstLine
+  if (msg.attachment) {
+    try { return 'Файл: ' + (JSON.parse(msg.attachment).name || 'вложение') } catch { }
+  }
+  return 'Задача из чата'
+}
+
+app.post('/api/messages/:id/task', (req, res) => {
+  try {
+    const msg = db.getMessageById(Number(req.params.id))
+    if (!msg) return res.status(404).json({ error: 'Сообщение не найдено' })
+
+    const existing = db.taskForMessage(msg.id)
+    if (existing) return res.json({ ...existing, existed: true })
+
+    const { title, workspace_id, column_id } = req.body || {}
+    const column = column_id ? db.kanban.getColumn(Number(column_id)) : db.kanban.defaultColumn(Number(workspace_id) || null)
+    if (!column) return res.status(400).json({ error: 'На канбане нет колонок' })
+
+    const cardTitle = (title && String(title).trim()) ? String(title).trim().slice(0, 200) : taskTitleFromMessage(msg)
+    // Цитата исходного текста в описании — чтобы контекст не терялся,
+    // даже если сообщение потом отредактируют или удалят
+    const quote = msg.text && msg.text.trim() !== cardTitle
+      ? msg.text.split('\n').map(l => '> ' + l).join('\n') + '\n\n'
+      : ''
+    const description = `${quote}_Из чата, автор: ${msg.user_name}_`
+
+    db.kanban.createCard(column.id, cardTitle, description, null, 'medium', null,
+      { message_id: msg.id, channel_id: msg.channel_id })
+
+    emitBoardUpdate(column.workspace_id)
+    const task = db.taskForMessage(msg.id)
+    io.to(`channel:${msg.channel_id}`).emit('message:task', { messageId: msg.id, task })
+    res.json(task)
+  } catch (e) {
+    console.error('message→task error:', e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ─── UPLOAD ───────────────────────────────────────────────
 app.post('/api/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Файл не получен' })
@@ -325,6 +369,18 @@ function emitBoardUpdate(workspaceId) {
   io.emit('kanban:update', { workspace_id: Number(workspaceId) || null, board: db.kanban.getBoard(workspaceId) })
 }
 
+// Обновляем чипы задач под сообщениями в чате (статус/колонка/архив/удаление).
+// links — результат db.kanban.linkedMessages(), берём его ДО удаления карточки.
+function emitTaskLinks(links) {
+  for (const l of links || []) {
+    io.to(`channel:${l.source_channel_id}`).emit('message:task', {
+      messageId: l.source_message_id,
+      task: db.taskForMessage(l.source_message_id)
+    })
+  }
+}
+const emitTasksForCards = (ids) => emitTaskLinks(db.kanban.linkedMessages(ids))
+
 app.get('/api/kanban', (req, res) => {
   res.json(db.kanban.getBoard(req.query.workspace_id ? Number(req.query.workspace_id) : null))
 })
@@ -345,6 +401,7 @@ app.patch('/api/kanban/cards/:id', (req, res) => {
   const { workspace_id, ...rest } = req.body
   const card = db.kanban.updateCard(req.params.id, rest)
   emitBoardUpdate(workspace_id)
+  emitTasksForCards([req.params.id])
   res.json(card)
 })
 
@@ -357,6 +414,7 @@ app.post('/api/kanban/cards/:id/move', (req, res) => {
   // должно обновиться содержимое для всех, кто сейчас на них смотрит
   emitBoardUpdate(result.oldWorkspaceId)
   if (result.newWorkspaceId !== result.oldWorkspaceId) emitBoardUpdate(result.newWorkspaceId)
+  emitTasksForCards([req.params.id])
   res.json(result.card)
 })
 
@@ -365,24 +423,29 @@ app.post('/api/kanban/cards/reorder', (req, res) => {
   const { workspace_id, cards } = Array.isArray(req.body) ? { workspace_id: null, cards: req.body } : req.body
   db.kanban.reorderCards(cards)
   emitBoardUpdate(workspace_id)
+  emitTasksForCards((cards || []).map(c => c.id))
   res.json({ ok: true })
 })
 
 app.delete('/api/kanban/cards/:id', (req, res) => {
+  const links = db.kanban.linkedMessages([req.params.id])
   db.kanban.deleteCard(req.params.id)
   emitBoardUpdate(req.query.workspace_id)
+  emitTaskLinks(links)
   res.json({ ok: true })
 })
 
 app.post('/api/kanban/cards/:id/archive', (req, res) => {
   db.kanban.archiveCard(req.params.id)
   emitBoardUpdate(req.body?.workspace_id)
+  emitTasksForCards([req.params.id])
   res.json({ ok: true })
 })
 
 app.post('/api/kanban/cards/:id/unarchive', (req, res) => {
   db.kanban.unarchiveCard(req.params.id)
   emitBoardUpdate(req.body?.workspace_id)
+  emitTasksForCards([req.params.id])
   res.json({ ok: true })
 })
 

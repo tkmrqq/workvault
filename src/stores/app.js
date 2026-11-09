@@ -40,6 +40,11 @@ export const useAppStore = defineStore('app', () => {
   const hasMore     = ref({})
   const onlineList  = ref([])
   const typingMap   = ref({})
+  // Переход «к исходному сообщению» из карточки: MessageList ждёт, пока канал
+  // загрузится, скроллит к сообщению и подсвечивает его (flashMsgId)
+  const focusTarget = ref(null) // { channelId, messageId }
+  const flashMsgId  = ref(null)
+  let flashTimer    = null
   // Фильтр вложений — свой на каждый канал, по умолчанию 'all'
   const attachmentFilters = ref(JSON.parse(localStorage.getItem('wv-attach-filters') || '{}'))
   let socket        = null
@@ -219,6 +224,12 @@ export const useAppStore = defineStore('app', () => {
       _patchMessage(messageId, m => ({ ...m, reactions }))
     })
 
+    // Задача, привязанная к сообщению, создана / переехала в другую колонку /
+    // ушла в архив / удалена (task === null)
+    socket.on('message:task', ({ messageId, task }) => {
+      _patchMessage(messageId, m => ({ ...m, task: task || null }))
+    })
+
     socket.on('typing:update', ({ userName, typing }) => {
       if (!activeChId.value) return
       if (!typingMap.value[activeChId.value]) typingMap.value[activeChId.value] = {}
@@ -366,6 +377,32 @@ export const useAppStore = defineStore('app', () => {
     })
   }
 
+  // Сообщение → задача на канбане. Зона — последняя открытая на канбане
+  // (KanbanView кладёт её в localStorage), колонка — первая в этой зоне.
+  async function createTaskFromMessage(messageId, { title } = {}) {
+    const workspaceId = Number(localStorage.getItem('wv-kanban-workspace')) || null
+    const res = await fetch(`${API}/api/messages/${messageId}/task`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ title: title || null, workspace_id: workspaceId })
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Не удалось создать задачу')
+    const { existed, ...task } = data
+    _patchMessage(messageId, m => ({ ...m, task }))
+    return data
+  }
+
+  function jumpToMessage(channelId, messageId) {
+    focusTarget.value = { channelId: Number(channelId), messageId: Number(messageId) }
+  }
+
+  function flashMessage(id) {
+    flashMsgId.value = id
+    clearTimeout(flashTimer)
+    flashTimer = setTimeout(() => { flashMsgId.value = null }, 2200)
+  }
+
   function getSocket() { return socket }
 
   function sendTyping() {
@@ -388,6 +425,7 @@ export const useAppStore = defineStore('app', () => {
     fetchFolders, setChannel, loadMore,
     sendMessage, uploadFile, unfurlUrl,
     editMessage, deleteMessage, toggleReaction, sendTyping,
-    isMessageEntering
+    isMessageEntering,
+    createTaskFromMessage, focusTarget, jumpToMessage, flashMsgId, flashMessage
   }
 })

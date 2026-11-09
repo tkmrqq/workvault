@@ -46,7 +46,6 @@ db.exec(`
     type        TEXT NOT NULL DEFAULT 'text',
     attachment  TEXT,
     link_meta   TEXT,
-    crm_done    INTEGER DEFAULT 0,
     edited      INTEGER DEFAULT 0,
     created_at  INTEGER DEFAULT (unixepoch()),
     updated_at  INTEGER DEFAULT (unixepoch())
@@ -171,6 +170,15 @@ try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN due_date INTEGER').run() }
 try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN done_at INTEGER').run() } catch { }
 try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN archived_at INTEGER').run() } catch { }
 try { db.prepare('ALTER TABLE kanban_subtasks ADD COLUMN description TEXT').run() } catch { }
+// Связь задачи с сообщением чата (/task, «Создать задачу» в ховер-меню).
+// ON DELETE SET NULL — удаление сообщения не должно ломаться из-за FK
+// (foreign_keys = ON), а source_channel_id без FK остаётся, чтобы карточка
+// могла показать «исходное сообщение удалено».
+try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN source_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL').run() } catch { }
+try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN source_channel_id INTEGER').run() } catch { }
+try { db.prepare('CREATE INDEX IF NOT EXISTS idx_kanban_cards_source_msg ON kanban_cards(source_message_id)').run() } catch { }
+// Колонка messages.crm_done — легаси от «Занести в CRM». В новых БД её больше
+// не создаём, в старых просто не используем (DROP COLUMN в SQLite не стоит риска).
 
 // Дефолтная рабочая зона + привязка "старых" колонок без workspace_id
 const wsCount = db.prepare('SELECT COUNT(*) as c FROM kanban_workspaces').get().c
@@ -339,7 +347,26 @@ function updateFolders(folders) {
 }
 
 // ─── QUERIES ─────────────────────────────────────────────
+// ─── Связь сообщение ↔ задача ─────────────────────────────
+// Компактное представление задачи для чипа под сообщением
+function taskForMessage(messageId) {
+  return db.prepare(`
+    SELECT k.id, k.title, k.done_at, k.archived_at,
+           c.title as column_title, c.color as column_color, c.is_terminal, c.workspace_id
+    FROM kanban_cards k LEFT JOIN kanban_columns c ON k.column_id = c.id
+    WHERE k.source_message_id = ?
+    ORDER BY k.id DESC LIMIT 1
+  `).get(messageId) || null
+}
+
 module.exports = {
+  taskForMessage,
+
+  getMessageById: (id) => db.prepare(`
+    SELECT m.*, u.name as user_name, u.avatar as user_avatar, u.color as user_color
+    FROM messages m JOIN users u ON m.user_id = u.id WHERE m.id = ?
+  `).get(id) || null,
+
   db,
 
   getUsers: () => db.prepare(`${publicUserSelect()} ORDER BY name`).all(),
@@ -416,6 +443,7 @@ module.exports = {
       ...row,
       attachment: row.attachment ? JSON.parse(row.attachment) : null,
       link_meta: row.link_meta ? JSON.parse(row.link_meta) : null,
+      task: taskForMessage(row.id),
       reactions: []  // реакции подтягиваются отдельно в server.js
     }))
   },
@@ -522,14 +550,16 @@ module.exports = {
         ORDER BY k.archived_at DESC
       `).all(...colIds)
     },
-    createCard: (column_id, title, description, assignee_id, priority, due_date) => {
+    createCard: (column_id, title, description, assignee_id, priority, due_date, source = null) => {
       const pos = db.prepare('SELECT COUNT(*) as c FROM kanban_cards WHERE column_id=?').get(column_id).c
       const isTerminal = db.prepare('SELECT is_terminal FROM kanban_columns WHERE id=?').get(column_id)?.is_terminal
       const r = db.prepare(`
-        INSERT INTO kanban_cards (column_id, title, description, assignee_id, priority, position, due_date, done_at)
-        VALUES (?,?,?,?,?,?,?,?)
+        INSERT INTO kanban_cards (column_id, title, description, assignee_id, priority, position, due_date, done_at,
+                                  source_message_id, source_channel_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
       `).run(column_id, title, description || null, assignee_id || null, priority || 'medium', pos,
-        due_date || null, isTerminal ? Math.floor(Date.now() / 1000) : null)
+        due_date || null, isTerminal ? Math.floor(Date.now() / 1000) : null,
+        source?.message_id || null, source?.channel_id || null)
       return db.prepare(`
         SELECT k.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
         FROM kanban_cards k LEFT JOIN users u ON k.assignee_id = u.id WHERE k.id=?
@@ -586,6 +616,27 @@ module.exports = {
     deleteCard: (id) => {
       db.prepare('DELETE FROM kanban_cards WHERE id=?').run(id)
     },
+    // Колонка по умолчанию для задач из чата: первая колонка зоны
+    // (или первой зоны вообще, если зона не указана/не существует)
+    defaultColumn: (workspaceId) => {
+      const inWs = workspaceId
+        ? db.prepare('SELECT * FROM kanban_columns WHERE workspace_id=? ORDER BY position LIMIT 1').get(workspaceId)
+        : null
+      return inWs || db.prepare(`
+        SELECT c.* FROM kanban_columns c LEFT JOIN kanban_workspaces w ON w.id = c.workspace_id
+        ORDER BY w.id, c.position LIMIT 1
+      `).get() || null
+    },
+    getColumn: (id) => db.prepare('SELECT * FROM kanban_columns WHERE id=?').get(id) || null,
+    // Какие из карточек привязаны к сообщениям — чтобы обновить чипы в чате
+    linkedMessages: (cardIds) => {
+      const ids = (cardIds || []).map(Number).filter(Boolean)
+      if (!ids.length) return []
+      return db.prepare(`
+        SELECT id, source_message_id, source_channel_id FROM kanban_cards
+        WHERE source_message_id IS NOT NULL AND id IN (${ids.map(() => '?').join(',')})
+      `).all(...ids)
+    },
     archiveCard: (id) => db.prepare('UPDATE kanban_cards SET archived_at=? WHERE id=?').run(Math.floor(Date.now() / 1000), id),
     unarchiveCard: (id) => db.prepare('UPDATE kanban_cards SET archived_at=NULL WHERE id=?').run(id),
     // Автоархив: карточки, лежащие в терминальной колонке дольше ARCHIVE_AFTER_MS
@@ -627,6 +678,17 @@ module.exports = {
         WHERE s.card_id = ? ORDER BY s.position
       `).all(id)
       card.subtasks.forEach(s => { s.tags = tagsForSubtask(s.id) })
+      card.source_message = card.source_message_id ? (db.prepare(`
+        SELECT m.id, m.channel_id, m.text, m.created_at, m.attachment,
+               u.name as user_name, u.avatar as user_avatar, u.color as user_color,
+               ch.name as channel_name, ch.icon as channel_icon
+        FROM messages m JOIN users u ON m.user_id = u.id
+        LEFT JOIN channels ch ON ch.id = m.channel_id
+        WHERE m.id = ?
+      `).get(card.source_message_id) || null) : null
+      if (card.source_message?.attachment) {
+        try { card.source_message.attachment = JSON.parse(card.source_message.attachment) } catch { card.source_message.attachment = null }
+      }
       return card
     },
     createSubtask: (card_id, title, assignee_id, priority, description) => {

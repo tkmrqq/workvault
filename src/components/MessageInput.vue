@@ -25,6 +25,31 @@
     <!-- Error -->
     <div v-if="fileError" class="file-error"><AlertTriangle :size="14" :stroke-width="2" style="vertical-align:-2px;margin-right:4px" />{{ fileError }}</div>
 
+    <!-- Slash-команды -->
+    <Transition name="slash-pop">
+      <div v-if="slashOpen" class="slash-menu" role="listbox">
+        <div class="slash-head">Команды</div>
+        <button v-for="(c, i) in slashMatches" :key="c.name" type="button"
+          class="slash-item" :class="{ active: i === slashIndex }" role="option"
+          @mousedown.prevent="applyCommand(c)" @mouseenter="slashIndex = i"
+        >
+          <span class="slash-ic"><component :is="c.icon" :size="14" :stroke-width="2" /></span>
+          <span class="slash-name">/{{ c.name }} <span class="slash-arg">{{ c.hint }}</span></span>
+          <span class="slash-desc">{{ c.desc }}</span>
+        </button>
+        <div class="slash-foot">↑↓ выбрать · Enter/Tab — подставить · Esc — закрыть</div>
+      </div>
+    </Transition>
+
+    <!-- Активная команда -->
+    <Transition name="slash-pop">
+      <div v-if="commandMatch" class="cmd-badge">
+        <component :is="commandMatch.cmd.icon" :size="13" :stroke-width="2.2" />
+        <span>{{ commandMatch.cmd.badge }}</span>
+        <span v-if="!commandMatch.arg && !pendingFile" class="cmd-warn">— добавь название</span>
+      </div>
+    </Transition>
+
     <!-- Input row -->
     <div class="input-row">
       <label class="attach-btn" title="Прикрепить файл">
@@ -53,15 +78,15 @@
     </div>
 
     <div class="input-hint">
-      Enter — отправить · Shift+Enter — новая строка · Ctrl+V — вставить картинку
+      Enter — отправить · Shift+Enter — новая строка · Ctrl+V — вставить картинку · / — команды
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { useAppStore } from '@/stores/app'
-import { X, Paperclip, AlertTriangle, Send, FileArchive, FileText, File as FileIcon, Film } from 'lucide-vue-next'
+import { X, Paperclip, AlertTriangle, Send, FileArchive, FileText, File as FileIcon, Film, ListPlus } from 'lucide-vue-next'
 
 const store      = useAppStore()
 const text       = ref('')
@@ -75,6 +100,60 @@ const linkTimer   = ref(null)
 const uploading   = ref(false)
 
 const MAX_SIZE = 100 * 1024 * 1024 // 100MB
+
+// ─── Slash-команды ───────────────────────────────────────────
+// Реестр расширяемый: добавляешь объект — команда появляется в меню,
+// а обработка живёт в send() (см. runCommandAfterSend).
+// Неизвестные /что-то уходят обычным текстом — чтобы не ломать пути вроде /etc/hosts.
+const COMMANDS = [
+  {
+    name:  'task',
+    hint:  '<название>',
+    desc:  'Отправить и сразу создать задачу на канбане',
+    badge: 'Сообщение станет задачей на канбане',
+    icon:  ListPlus
+  }
+]
+
+const slashIndex     = ref(0)
+const slashDismissed = ref(false)
+// Меню видно, пока печатается само имя команды (до первого пробела)
+const slashQuery   = computed(() => {
+  const m = text.value.match(/^\/(\w*)$/)
+  return m ? m[1].toLowerCase() : null
+})
+const slashMatches = computed(() =>
+  slashQuery.value === null ? [] : COMMANDS.filter(c => c.name.startsWith(slashQuery.value))
+)
+const slashOpen = computed(() => !slashDismissed.value && slashMatches.value.length > 0)
+watch(slashQuery, () => { slashIndex.value = 0; slashDismissed.value = false })
+
+// Команда уже введена целиком: "/task Купить домен"
+const commandMatch = computed(() => {
+  const m = text.value.match(/^\/(\w+)(\s[\s\S]*)?$/)
+  if (!m || m[2] === undefined) return null
+  const cmd = COMMANDS.find(c => c.name === m[1].toLowerCase())
+  return cmd ? { cmd, arg: m[2].trim() } : null
+})
+
+function applyCommand(c) {
+  if (!c) return
+  text.value = `/${c.name} `
+  nextTick(() => {
+    const ta = taRef.value
+    if (!ta) return
+    ta.focus()
+    ta.selectionStart = ta.selectionEnd = text.value.length
+    autoResize()
+  })
+}
+
+let errorTimer = null
+function showError(msg, ms = 4000) {
+  fileError.value = msg
+  clearTimeout(errorTimer)
+  errorTimer = setTimeout(() => fileError.value = '', ms)
+}
 
 const ACCEPTED_MIME = /^(image\/(jpeg|jpg|png|gif|webp)|video\/(mp4|webm|quicktime|x-matroska)|application\/(pdf|zip|x-zip-compressed|msword|vnd\.openxmlformats-officedocument\.wordprocessingml\.document)|text\/plain)$/
 const ACCEPTED_EXT  = /\.(jpg|jpeg|png|gif|webp|mp4|webm|mov|mkv|pdf|zip|txt|doc|docx)$/i
@@ -195,6 +274,17 @@ function clearFile() {
 }
 
 function onKeydown(e) {
+  if (slashOpen.value) {
+    const n = slashMatches.value.length
+    if (e.key === 'ArrowDown') { e.preventDefault(); slashIndex.value = (slashIndex.value + 1) % n; return }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); slashIndex.value = (slashIndex.value - 1 + n) % n; return }
+    if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+      e.preventDefault()
+      applyCommand(slashMatches.value[slashIndex.value])
+      return
+    }
+    if (e.key === 'Escape') { e.preventDefault(); slashDismissed.value = true; return }
+  }
   if (e.key === 'Enter') {
     if (e.shiftKey) {
       e.preventDefault()
@@ -211,7 +301,14 @@ function onKeydown(e) {
 
 async function send() {
   if (!canSend.value) return
-  const msgText = text.value.trim()
+  const rawText = text.value
+  const cmd     = commandMatch.value
+  // Для /task в чат уходит только само название, без префикса
+  const msgText = cmd ? cmd.arg : text.value.trim()
+  if (cmd && !msgText && !pendingFile.value) {
+    showError('Добавь название: /task Купить домен')
+    return
+  }
   text.value = ''
   const meta = linkPreview.value ? { ...linkPreview.value } : null
   linkPreview.value = null
@@ -227,7 +324,7 @@ async function send() {
       setTimeout(() => fileError.value = '', 4000)
       uploading.value = false
       // Восстанавливаем текст — раз файл не улетел, всё сообщение не отправлено
-      text.value = msgText
+      text.value = rawText
       await nextTick(); autoResize()
       return
     } finally {
@@ -236,23 +333,37 @@ async function send() {
     }
   }
 
+  let ack
   try {
-    await store.sendMessage({ text: msgText || null, attachment, linkMeta: meta })
+    ack = await store.sendMessage({ text: msgText || null, attachment, linkMeta: meta })
   } catch (e) {
     // Сообщение реально не сохранилось на сервере — не даём тексту молча
     // пропасть: возвращаем его в поле и показываем причину
-    fileError.value = e.message || 'Не удалось отправить сообщение'
-    setTimeout(() => fileError.value = '', 5000)
-    text.value = msgText
+    showError(e.message || 'Не удалось отправить сообщение', 5000)
+    text.value = rawText
     await nextTick(); autoResize()
     return
   }
+  await runCommandAfterSend(cmd, ack, msgText)
   taRef.value?.focus()
+}
+
+// Пост-обработка slash-команд: сообщение уже сохранено, теперь привязываем к нему действие
+async function runCommandAfterSend(cmd, ack, msgText) {
+  if (!cmd || !ack?.id) return
+  if (cmd.cmd.name === 'task') {
+    try {
+      await store.createTaskFromMessage(ack.id, { title: msgText || null })
+    } catch (e) {
+      showError('Сообщение отправлено, но задачу создать не удалось: ' + (e.message || 'ошибка'), 6000)
+    }
+  }
 }
 </script>
 
 <style scoped>
 .input-area {
+  position: relative;
   border-top: 1px solid var(--divider);
   background: var(--surface);
   padding: var(--space-3) var(--space-5) var(--space-2);
@@ -326,4 +437,49 @@ async function send() {
 .send-btn:disabled { opacity: .4; cursor: not-allowed; }
 
 .input-hint { padding: var(--space-1) var(--space-2) 0; font-size: 10px; color: var(--text-faint); }
+
+/* ── Slash-меню ── */
+.slash-menu {
+  position: absolute; z-index: 30;
+  left: var(--space-5); right: var(--space-5); bottom: calc(100% - 2px);
+  max-width: 460px;
+  padding: 6px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-md);
+  transform-origin: bottom left;
+}
+.slash-head {
+  padding: 4px 8px 6px; font-size: 10px; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase; color: var(--text-faint);
+}
+.slash-item {
+  width: 100%; display: grid; grid-template-columns: 26px auto 1fr; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: var(--radius-md); text-align: left;
+  color: var(--text); font-size: var(--text-sm);
+  transition: background var(--dur-fast, .15s) var(--ease-out, ease);
+}
+.slash-item.active { background: var(--accent-soft); }
+.slash-ic {
+  width: 26px; height: 26px; border-radius: var(--radius-md);
+  display: flex; align-items: center; justify-content: center;
+  background: var(--surface-3); color: var(--accent);
+  transition: transform var(--dur, .25s) var(--ease-spring, ease);
+}
+.slash-item.active .slash-ic { transform: scale(1.08); }
+.slash-name { font-weight: 700; white-space: nowrap; }
+.slash-arg  { font-weight: 400; color: var(--text-faint); }
+.slash-desc { color: var(--text-muted); font-size: var(--text-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slash-foot { padding: 6px 8px 2px; font-size: 10px; color: var(--text-faint); border-top: 1px solid var(--divider); margin-top: 4px; }
+
+.cmd-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-bottom: var(--space-2); padding: 3px 10px;
+  border-radius: 999px; background: var(--accent-soft); color: var(--accent);
+  font-size: var(--text-xs); font-weight: 600;
+}
+.cmd-warn { color: var(--text-muted); font-weight: 400; }
+
+.slash-pop-enter-active { transition: opacity var(--dur-fast, .15s) var(--ease-out, ease), transform var(--dur, .25s) var(--ease-spring, ease); }
+.slash-pop-leave-active { transition: opacity var(--dur-fast, .15s) ease, transform var(--dur-fast, .15s) ease; }
+.slash-pop-enter-from, .slash-pop-leave-to { opacity: 0; transform: translateY(6px) scale(.97); }
 </style>

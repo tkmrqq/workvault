@@ -1,5 +1,5 @@
 <template>
-  <div class="msg-wrap" :class="{ own: isOwn, 'msg-enter': uiPreferences.animationsEnabled && store.isMessageEntering(msg.id) }">
+  <div class="msg-wrap" :data-msg-id="msg.id" :class="{ own: isOwn, 'msg-enter': uiPreferences.animationsEnabled && store.isMessageEntering(msg.id), flash: store.flashMsgId === msg.id }">
     <div class="msg-avatar"
       :style="{ background: msg.user_color + '22', color: msg.user_color }"
       @click="openProfile(msg.user_id)"
@@ -70,6 +70,25 @@
         </div>
       </div>
 
+      <!-- Привязанная задача с канбана -->
+      <Transition name="task-chip">
+        <button v-if="msg.task" type="button" class="task-chip"
+          :class="{ done: taskDone, archived: !!msg.task.archived_at }"
+          :style="{ '--chip-c': msg.task.column_color || 'var(--accent)' }"
+          title="Открыть задачу"
+          @click="openTask"
+        >
+          <span class="tc-icon">
+            <Check v-if="taskDone" :size="11" :stroke-width="3" />
+            <ListChecks v-else :size="11" :stroke-width="2.4" />
+          </span>
+          <span class="tc-title">{{ msg.task.title }}</span>
+          <Transition name="tc-swap" mode="out-in">
+            <span :key="taskStatus" class="tc-status">{{ taskStatus }}</span>
+          </Transition>
+        </button>
+      </Transition>
+
       <!-- Reactions -->
       <div v-if="msg.reactions?.length" class="reactions">
         <button v-for="group in groupedReactions" :key="group.emoji"
@@ -83,6 +102,7 @@
     <!-- Actions -->
     <div class="msg-actions">
       <button class="act-btn" title="Реакция" @click.stop="showPicker = !showPicker"><SmilePlus :size="15" :stroke-width="2" /></button>
+      <button v-if="!msg.task" class="act-btn" title="Создать задачу" :disabled="creatingTask" @click="makeTask"><ListPlus :size="15" :stroke-width="2" /></button>
       <button v-if="isOwn" class="act-btn" title="Редактировать" @click="startEdit"><Pencil :size="14" :stroke-width="2" /></button>
       <button v-if="isOwn" class="act-btn red" title="Удалить" @click="store.deleteMessage(msg.id)"><Trash2 :size="14" :stroke-width="2" /></button>
     </div>
@@ -102,12 +122,13 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { getApiBase } from '@/lib/apiBase'
 import { uiPreferences } from '@/composables/useUiPreferences'
 import ProfileModal from './ProfileModal.vue'
 import {
-  Download, SmilePlus, Pencil, Trash2,
+  Download, SmilePlus, Pencil, Trash2, ListPlus, ListChecks, Check,
   FileArchive, FileText, FileSpreadsheet, Music, Film, Image as ImageIcon, File as FileIcon
 } from 'lucide-vue-next'
 
@@ -130,6 +151,7 @@ async function openProfile(userId) {
 const props = defineProps({ msg: Object })
 const emit  = defineEmits(['open-image'])
 const store = useAppStore()
+const router = useRouter()
 
 const editing    = ref(false)
 const editText   = ref('')
@@ -235,6 +257,30 @@ function renderText(text) {
     .replace(/\n/g, '<br>')
 }
 
+// ─── Сообщение ↔ задача ──────────────────────────────────
+const creatingTask = ref(false)
+const taskDone   = computed(() => !!props.msg.task?.is_terminal)
+const taskStatus = computed(() => {
+  const t = props.msg.task
+  if (!t) return ''
+  if (t.archived_at) return 'В архиве'
+  return t.column_title || 'Задача'
+})
+async function makeTask() {
+  if (creatingTask.value) return
+  creatingTask.value = true
+  try {
+    await store.createTaskFromMessage(props.msg.id)
+  } catch (e) {
+    alert(e.message || 'Не удалось создать задачу')
+  } finally {
+    creatingTask.value = false
+  }
+}
+function openTask() {
+  if (props.msg.task?.id) router.push(`/kanban/${props.msg.task.id}`)
+}
+
 function startEdit() { editText.value = props.msg.text || ''; editing.value = true }
 function submitEdit() {
   if (editText.value.trim()) store.editMessage(props.msg.id, editText.value.trim())
@@ -258,6 +304,58 @@ function pick(emoji) { store.toggleReaction(props.msg.id, emoji); showPicker.val
   to { opacity: 1; transform: translateY(0); }
 }
 .msg-wrap:hover { background: var(--surface); }
+
+/* Подсветка при переходе «к исходному сообщению» из карточки */
+.msg-wrap.flash { animation: msgFlash 2.2s var(--ease-out, ease) both; }
+@keyframes msgFlash {
+  0%, 35% { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+  100%    { background: transparent;        box-shadow: inset 3px 0 0 transparent; }
+}
+
+/* ── Чип привязанной задачи ── */
+.task-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 100%; margin-top: 6px;
+  padding: 3px 10px 3px 4px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--chip-c) 35%, transparent);
+  background: color-mix(in srgb, var(--chip-c) 12%, transparent);
+  font-size: var(--text-xs); color: var(--text);
+  cursor: pointer;
+  transition: background var(--dur-fast, .15s) var(--ease-out, ease),
+              border-color var(--dur-fast, .15s) var(--ease-out, ease),
+              transform var(--dur-fast, .15s) var(--ease-out, ease);
+}
+.task-chip:hover {
+  background: color-mix(in srgb, var(--chip-c) 22%, transparent);
+  border-color: color-mix(in srgb, var(--chip-c) 60%, transparent);
+  transform: translateY(-1px);
+}
+.task-chip:active { transform: translateY(0) scale(.98); }
+.tc-icon {
+  width: 18px; height: 18px; flex-shrink: 0; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--chip-c); color: #fff;
+  transition: transform var(--dur, .25s) var(--ease-spring, ease);
+}
+.task-chip:hover .tc-icon { transform: rotate(-8deg) scale(1.08); }
+.tc-title {
+  font-weight: 600; min-width: 0; max-width: 340px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tc-status { color: var(--text-muted); white-space: nowrap; }
+.tc-status::before { content: '·'; margin-right: 6px; color: var(--text-faint); }
+.task-chip.done .tc-title { text-decoration: line-through; color: var(--text-muted); }
+.task-chip.archived { opacity: .6; }
+
+.task-chip-enter-active { transition: opacity var(--dur, .25s) var(--ease-out, ease), transform var(--dur-slow, .35s) var(--ease-spring, ease); }
+.task-chip-leave-active { transition: opacity var(--dur-fast, .15s) ease, transform var(--dur-fast, .15s) ease; }
+.task-chip-enter-from   { opacity: 0; transform: translateY(4px) scale(.9); }
+.task-chip-leave-to     { opacity: 0; transform: scale(.95); }
+
+.tc-swap-enter-active, .tc-swap-leave-active { transition: opacity var(--dur-fast, .15s) ease, transform var(--dur-fast, .15s) var(--ease-out, ease); }
+.tc-swap-enter-from { opacity: 0; transform: translateY(5px); }
+.tc-swap-leave-to   { opacity: 0; transform: translateY(-5px); }
 .msg-wrap:hover .msg-actions { opacity: 1; pointer-events: all; }
 
 .msg-avatar {

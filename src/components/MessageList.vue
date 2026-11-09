@@ -124,6 +124,40 @@ watch(() => store.activeChId, () => {
   nextTick(() => bottomEl.value?.scrollIntoView())
 })
 watch(() => store.typingNames.length, () => scrollToBottom())
+
+// ─── Переход к конкретному сообщению (из карточки канбана) ───────
+// Если сообщение старое и ещё не подгружено — догружаем историю пачками.
+let focusBusy = false
+async function tryFocusMessage() {
+  const target = store.focusTarget
+  if (!target || focusBusy) return
+  if (target.channelId !== store.activeChId || !store.activeMessages.length) return
+  focusBusy = true
+  try {
+    atBottom.value = false // чтобы автоскролл вниз не перебил нас
+    for (let i = 0; i < 20; i++) {
+      const list = store.activeMessages
+      if (list.some(m => m.id === target.messageId)) break
+      if (!store.hasMore[store.activeChId] || list[0].id < target.messageId) break
+      if (!(await store.loadMore(store.activeChId))) break
+    }
+    await nextTick()
+    await new Promise(r => setTimeout(r, 60))
+    const el = listEl.value?.querySelector(`[data-msg-id="${target.messageId}"]`)
+    if (el) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      store.flashMessage(target.messageId)
+    }
+  } finally {
+    store.focusTarget = null
+    focusBusy = false
+  }
+}
+watch(
+  () => [store.focusTarget, store.activeChId, store.activeMessages.length],
+  tryFocusMessage,
+  { immediate: true }
+)
 </script>
 
 <style scoped>

@@ -162,6 +162,9 @@
                       <span class="assignee-name">{{ card.assignee_name }}</span>
                     </div>
                     <div v-else class="card-assignee-empty">Не назначено</div>
+                    <span v-if="card.source_message_id" class="card-source" title="Создано из сообщения в чате">
+                      <MessageSquare :size="11" :stroke-width="2.2" />
+                    </span>
                   </div>
               </div>
               </template>
@@ -359,7 +362,7 @@ import { useKanbanDrag } from '@/composables/useKanbanDrag'
 import {
   Archive, Plus, X, Check, Calendar, RotateCcw,
   LayoutDashboard, ArrowDown, ArrowRight, ArrowUp,
-  ListChecks, Copy, Download, GripVertical, Pencil, ListFilter, ArrowDownWideNarrow
+  ListChecks, Copy, Download, GripVertical, Pencil, ListFilter, ArrowDownWideNarrow, MessageSquare
 } from 'lucide-vue-next'
 
 const store  = useAppStore()
@@ -800,12 +803,16 @@ async function loadWorkspaces() {
   const r = await fetch(`${API}/api/kanban/workspaces`)
   workspaces.value = await r.json()
   if (!activeWorkspaceId.value && workspaces.value.length) {
-    activeWorkspaceId.value = workspaces.value[0].id
+    // Возвращаемся в последнюю открытую зону (её же использует /task из чата)
+    const saved = Number(localStorage.getItem('wv-kanban-workspace'))
+    activeWorkspaceId.value = workspaces.value.some(w => w.id === saved) ? saved : workspaces.value[0].id
+    localStorage.setItem('wv-kanban-workspace', String(activeWorkspaceId.value))
   }
 }
 function switchWorkspace(id) {
   if (id === activeWorkspaceId.value) return
   activeWorkspaceId.value = id
+  localStorage.setItem('wv-kanban-workspace', String(id))
   loadBoard()
 }
 // ─── Create/edit workspace modal ───────────────────────────
@@ -1326,7 +1333,8 @@ onUnmounted(() => {
 }
 .card-progress-label { font-size: 10px; font-weight: 700; color: var(--text-faint); }
 
-.card-footer { margin-top: 8px; }
+.card-footer { margin-top: 8px; display: flex; align-items: center; gap: 6px; }
+.card-source { margin-left: auto; display: inline-flex; color: var(--text-faint); }
 .card-assignee {
   display: flex; align-items: center; gap: 6px;
 }

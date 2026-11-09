@@ -67,6 +67,24 @@
               <div v-if="card.description" class="card-page-desc markdown-body compact-mobile" v-html="renderMarkdown(card.description)"></div>
               <button v-if="card.description" type="button" class="desc-expand-hint mobile-only" @click="descFullscreen = true">Читать целиком</button>
               <p v-else class="card-page-desc empty">Нет описания</p>
+
+              <!-- Исходное сообщение в чате -->
+              <button v-if="card.source_message" type="button" class="source-msg" @click="goToSourceMessage">
+                <span class="sm-avatar" :style="{ background: card.source_message.user_color + '22', color: card.source_message.user_color }">
+                  {{ card.source_message.user_avatar }}
+                </span>
+                <span class="sm-body">
+                  <span class="sm-head">
+                    <MessageSquare :size="12" :stroke-width="2.2" />
+                    Из сообщения в #{{ card.source_message.channel_name || 'канал' }} · {{ card.source_message.user_name }}
+                  </span>
+                  <span class="sm-text">{{ sourceSnippet }}</span>
+                </span>
+                <ArrowRightIcon class="sm-go" :size="15" :stroke-width="2.2" />
+              </button>
+              <div v-else-if="card.source_channel_id" class="source-msg missing">
+                <MessageSquare :size="12" :stroke-width="2.2" /> Исходное сообщение удалено
+              </div>
             </template>
 
             <!-- Edit mode -->
@@ -412,13 +430,28 @@ import { uiPreferences } from '@/composables/useUiPreferences'
 import {
   ArrowLeft, Archive, RotateCcw, Pencil, X, Plus,
   ArrowDown, ArrowRight as ArrowRightIcon, ArrowUp as ArrowUpIcon, Tag, GripVertical,
-  ListChecks, Copy, Download, FolderInput
+  ListChecks, Copy, Download, FolderInput, MessageSquare
 } from 'lucide-vue-next'
 
 const store  = useAppStore()
 const route  = useRoute()
 const router = useRouter()
 const API    = getApiBase()
+
+// ─── Связь с сообщением чата ─────────────────────────────
+const sourceSnippet = computed(() => {
+  const m = card.value?.source_message
+  if (!m) return ''
+  const t = (m.text || '').replace(/\s+/g, ' ').trim()
+  if (t) return t.length > 160 ? t.slice(0, 157) + '…' : t
+  return m.attachment?.name ? `📎 ${m.attachment.name}` : 'Сообщение без текста'
+})
+function goToSourceMessage() {
+  const m = card.value?.source_message
+  if (!m) return
+  store.jumpToMessage(m.channel_id, m.id)
+  router.push(`/chat/${m.channel_id}`)
+}
 
 // ─── Сетевые запросы с обработкой ошибок ───────────────────
 const apiError = ref('')
