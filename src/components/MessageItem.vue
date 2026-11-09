@@ -1,5 +1,5 @@
 <template>
-  <div class="msg-wrap" :data-msg-id="msg.id" :class="{ own: isOwn, 'msg-enter': uiPreferences.animationsEnabled && store.isMessageEntering(msg.id), flash: store.flashMsgId === msg.id }">
+  <div class="msg-wrap" :data-msg-id="msg.id" :class="{ own: isOwn, 'msg-enter': uiPreferences.animationsEnabled && store.isMessageEntering(msg.id), flash: store.flashMsgId === msg.id, 'thread-open': !inThread && store.threadParentId === msg.id }">
     <div class="msg-avatar"
       :style="{ background: msg.user_color + '22', color: msg.user_color }"
       @click="openProfile(msg.user_id)"
@@ -97,11 +97,30 @@
           @click="store.toggleReaction(msg.id, group.emoji)"
         >{{ group.emoji }} <span class="reaction-count">{{ group.count }}</span></button>
       </div>
+
+      <!-- Сводка треда -->
+      <Transition name="task-chip">
+        <button v-if="!inThread && msg.reply_count" type="button" class="thread-summary"
+          :class="{ active: store.threadParentId === msg.id }"
+          @click="store.openThread(msg.id)"
+        >
+          <span class="ts-avatars">
+            <span v-for="u in msg.reply_users || []" :key="u.id" class="ts-av"
+              :style="{ background: u.color + '22', color: u.color }" :title="u.name">{{ u.avatar }}</span>
+          </span>
+          <Transition name="tc-swap" mode="out-in">
+            <span :key="msg.reply_count" class="ts-count">{{ replyLabel }}</span>
+          </Transition>
+          <span class="ts-last">{{ lastReplyLabel }}</span>
+          <ChevronRight class="ts-go" :size="13" :stroke-width="2.4" />
+        </button>
+      </Transition>
     </div>
 
     <!-- Actions -->
     <div class="msg-actions">
       <button class="act-btn" title="Реакция" @click.stop="showPicker = !showPicker"><SmilePlus :size="15" :stroke-width="2" /></button>
+      <button v-if="!inThread" class="act-btn" title="Ответить в треде" @click="store.openThread(msg.id)"><MessagesSquare :size="15" :stroke-width="2" /></button>
       <button v-if="!msg.task" class="act-btn" title="Создать задачу" :disabled="creatingTask" @click="makeTask"><ListPlus :size="15" :stroke-width="2" /></button>
       <button v-if="isOwn" class="act-btn" title="Редактировать" @click="startEdit"><Pencil :size="14" :stroke-width="2" /></button>
       <button v-if="isOwn" class="act-btn red" title="Удалить" @click="store.deleteMessage(msg.id)"><Trash2 :size="14" :stroke-width="2" /></button>
@@ -128,7 +147,7 @@ import { getApiBase } from '@/lib/apiBase'
 import { uiPreferences } from '@/composables/useUiPreferences'
 import ProfileModal from './ProfileModal.vue'
 import {
-  Download, SmilePlus, Pencil, Trash2, ListPlus, ListChecks, Check,
+  Download, SmilePlus, Pencil, Trash2, ListPlus, ListChecks, Check, MessagesSquare, ChevronRight,
   FileArchive, FileText, FileSpreadsheet, Music, Film, Image as ImageIcon, File as FileIcon
 } from 'lucide-vue-next'
 
@@ -148,7 +167,8 @@ async function openProfile(userId) {
   }
 }
 
-const props = defineProps({ msg: Object })
+// inThread — сообщение рисуется внутри панели треда (без кнопки «Ответить в треде» и сводки)
+const props = defineProps({ msg: Object, inThread: { type: Boolean, default: false } })
 const emit  = defineEmits(['open-image'])
 const store = useAppStore()
 const router = useRouter()
@@ -257,6 +277,27 @@ function renderText(text) {
     .replace(/\n/g, '<br>')
 }
 
+// ─── Сводка треда ────────────────────────────────────────
+function plural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100
+  if (m10 === 1 && m100 !== 11) return one
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few
+  return many
+}
+const replyLabel = computed(() => {
+  const n = props.msg.reply_count || 0
+  return `${n} ${plural(n, 'ответ', 'ответа', 'ответов')}`
+})
+const lastReplyLabel = computed(() => {
+  const ts = props.msg.last_reply_at
+  if (!ts) return ''
+  const diff = Math.floor(Date.now() / 1000) - ts
+  if (diff < 60)    return 'только что'
+  if (diff < 3600)  return `${Math.floor(diff / 60)} мин назад`
+  if (diff < 86400) return `${Math.floor(diff / 3600)} ч назад`
+  return 'последний ' + new Date(ts * 1000).toLocaleDateString('ru', { day: 'numeric', month: 'short' })
+})
+
 // ─── Сообщение ↔ задача ──────────────────────────────────
 const creatingTask = ref(false)
 const taskDone   = computed(() => !!props.msg.task?.is_terminal)
@@ -311,6 +352,38 @@ function pick(emoji) { store.toggleReaction(props.msg.id, emoji); showPicker.val
   0%, 35% { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
   100%    { background: transparent;        box-shadow: inset 3px 0 0 transparent; }
 }
+
+/* Корень открытого сейчас треда */
+.msg-wrap.thread-open { background: var(--accent-soft); }
+
+/* ── Сводка треда ── */
+.thread-summary {
+  display: flex; align-items: center; gap: 8px;
+  width: fit-content; max-width: 100%; margin-top: 6px;
+  padding: 3px 8px 3px 3px;
+  border: 1px solid transparent; border-radius: var(--radius-md);
+  font-size: var(--text-xs); color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--dur-fast, .15s) var(--ease-out, ease),
+              border-color var(--dur-fast, .15s) var(--ease-out, ease);
+}
+.thread-summary:hover, .thread-summary.active {
+  background: var(--surface-2, var(--surface)); border-color: var(--border);
+}
+.ts-avatars { display: flex; }
+.ts-av {
+  width: 20px; height: 20px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; box-shadow: 0 0 0 2px var(--bg);
+}
+.ts-av + .ts-av { margin-left: -4px; }
+.ts-count { font-weight: 700; color: var(--accent); }
+.ts-last  { color: var(--text-faint); white-space: nowrap; }
+.ts-go {
+  color: var(--text-faint); opacity: 0; transform: translateX(-4px);
+  transition: opacity var(--dur-fast, .15s) ease, transform var(--dur, .25s) var(--ease-out, ease);
+}
+.thread-summary:hover .ts-go, .thread-summary.active .ts-go { opacity: 1; transform: none; }
 
 /* ── Чип привязанной задачи ── */
 .task-chip {

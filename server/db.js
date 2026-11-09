@@ -180,6 +180,11 @@ try { db.prepare('CREATE INDEX IF NOT EXISTS idx_kanban_cards_source_msg ON kanb
 // Колонка messages.crm_done — легаси от «Занести в CRM». В новых БД её больше
 // не создаём, в старых просто не используем (DROP COLUMN в SQLite не стоит риска).
 
+// Треды: ответ — обычное сообщение с parent_id. Треды плоские (как в Slack):
+// у ответа не бывает своих ответов. Удалили корень — удаляется и тред.
+try { db.prepare('ALTER TABLE messages ADD COLUMN parent_id INTEGER REFERENCES messages(id) ON DELETE CASCADE').run() } catch { }
+try { db.prepare('CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_id)').run() } catch { }
+
 // Дефолтная рабочая зона + привязка "старых" колонок без workspace_id
 const wsCount = db.prepare('SELECT COUNT(*) as c FROM kanban_workspaces').get().c
 if (wsCount === 0) {
@@ -359,8 +364,45 @@ function taskForMessage(messageId) {
   `).get(messageId) || null
 }
 
+// Сводка треда для корневого сообщения: сколько ответов, когда последний, кто отвечал
+function threadMeta(messageId) {
+  const agg = db.prepare('SELECT COUNT(*) as c, MAX(created_at) as last FROM messages WHERE parent_id = ?').get(messageId)
+  if (!agg.c) return { reply_count: 0, last_reply_at: null, reply_users: [] }
+  const users = db.prepare(`
+    SELECT u.id, u.name, u.avatar, u.color, MAX(m.id) as last_id
+    FROM messages m JOIN users u ON m.user_id = u.id
+    WHERE m.parent_id = ?
+    GROUP BY u.id ORDER BY last_id DESC LIMIT 3
+  `).all(messageId).map(({ last_id, ...u }) => u)
+  return { reply_count: agg.c, last_reply_at: agg.last, reply_users: users }
+}
+
+function parseMessageRow(row) {
+  return {
+    ...row,
+    attachment: row.attachment ? JSON.parse(row.attachment) : null,
+    link_meta: row.link_meta ? JSON.parse(row.link_meta) : null,
+    task: taskForMessage(row.id),
+    ...(row.parent_id ? {} : threadMeta(row.id)),
+    reactions: []  // реакции подтягиваются отдельно в server.js
+  }
+}
+
+const MESSAGE_SELECT = `SELECT m.*, u.name as user_name, u.avatar as user_avatar, u.color as user_color
+  FROM messages m JOIN users u ON m.user_id = u.id`
+
 module.exports = {
   taskForMessage,
+  threadMeta,
+
+  // Сообщение целиком (JSON распарсен, задача и сводка треда на месте)
+  getMessageFull: (id) => {
+    const row = db.prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(id)
+    return row ? parseMessageRow(row) : null
+  },
+
+  getReplies: (parentId) =>
+    db.prepare(`${MESSAGE_SELECT} WHERE m.parent_id = ? ORDER BY m.id ASC LIMIT 1000`).all(parentId).map(parseMessageRow),
 
   getMessageById: (id) => db.prepare(`
     SELECT m.*, u.name as user_name, u.avatar as user_avatar, u.color as user_color
@@ -429,23 +471,18 @@ module.exports = {
     const q = before
       ? db.prepare(`SELECT m.*, u.name as user_name, u.avatar as user_avatar, u.color as user_color
           FROM messages m JOIN users u ON m.user_id = u.id
-          WHERE m.channel_id = ? AND m.id < ?
+          WHERE m.channel_id = ? AND m.parent_id IS NULL AND m.id < ?
           ORDER BY m.id DESC LIMIT ?`)
         .all(channelId, before, limit)
       : db.prepare(`SELECT m.*, u.name as user_name, u.avatar as user_avatar, u.color as user_color
           FROM messages m JOIN users u ON m.user_id = u.id
-          WHERE m.channel_id = ?
+          WHERE m.channel_id = ? AND m.parent_id IS NULL
           ORDER BY m.id DESC LIMIT ?`)
         .all(channelId, limit)
 
     // ↓ ВОТ ЧТО НУЖНО ДОБАВИТЬ — парсим JSON поля
-    return q.reverse().map(row => ({
-      ...row,
-      attachment: row.attachment ? JSON.parse(row.attachment) : null,
-      link_meta: row.link_meta ? JSON.parse(row.link_meta) : null,
-      task: taskForMessage(row.id),
-      reactions: []  // реакции подтягиваются отдельно в server.js
-    }))
+    // Ответы тредов в ленту канала не попадают — только сводка под корнем
+    return q.reverse().map(parseMessageRow)
   },
 
   getReactions: (messageId) =>
@@ -457,9 +494,9 @@ module.exports = {
   // сериализация делается один раз, на вызывающей стороне (server.js), здесь
   // просто пишем как есть. Раньше linkMeta сериализовался второй раз прямо тут —
   // на выходе получался JSON-строка JSON-строки, и превью ссылок ломались.
-  createMessage: (channelId, userId, text, type = 'text', attachment = null, linkMeta = null) =>
-    db.prepare(`INSERT INTO messages (channel_id, user_id, text, type, attachment, link_meta)
-      VALUES (?,?,?,?,?,?)`).run(channelId, userId, text, type, attachment, linkMeta),
+  createMessage: (channelId, userId, text, type = 'text', attachment = null, linkMeta = null, parentId = null) =>
+    db.prepare(`INSERT INTO messages (channel_id, user_id, text, type, attachment, link_meta, parent_id)
+      VALUES (?,?,?,?,?,?,?)`).run(channelId, userId, text, type, attachment, linkMeta, parentId),
 
   editMessage: (id, text, userId) =>
     db.prepare(`UPDATE messages SET text=?, edited=1, updated_at=unixepoch()
@@ -679,7 +716,7 @@ module.exports = {
       `).all(id)
       card.subtasks.forEach(s => { s.tags = tagsForSubtask(s.id) })
       card.source_message = card.source_message_id ? (db.prepare(`
-        SELECT m.id, m.channel_id, m.text, m.created_at, m.attachment,
+        SELECT m.id, m.channel_id, m.parent_id, m.text, m.created_at, m.attachment,
                u.name as user_name, u.avatar as user_avatar, u.color as user_color,
                ch.name as channel_name, ch.icon as channel_icon
         FROM messages m JOIN users u ON m.user_id = u.id

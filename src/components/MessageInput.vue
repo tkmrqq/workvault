@@ -65,7 +65,7 @@
         ref="taRef"
         v-model="text"
         class="msg-input"
-        :placeholder="`Написать в #${store.activeChannel?.name || ''}...`"
+        :placeholder="parentId ? 'Ответить в треде...' : `Написать в #${store.activeChannel?.name || ''}...`"
         :disabled="!store.activeChId"
         rows="1"
         @keydown="onKeydown"
@@ -89,6 +89,8 @@ import { useAppStore } from '@/stores/app'
 import { X, Paperclip, AlertTriangle, Send, FileArchive, FileText, File as FileIcon, Film, ListPlus } from 'lucide-vue-next'
 
 const store      = useAppStore()
+// parentId задан — это поле ввода в панели треда, сообщения уходят ответами
+const props      = defineProps({ parentId: { type: Number, default: null } })
 const text       = ref('')
 const pendingFile = ref(null)
 const linkPreview = ref(null)
@@ -335,7 +337,7 @@ async function send() {
 
   let ack
   try {
-    ack = await store.sendMessage({ text: msgText || null, attachment, linkMeta: meta })
+    ack = await store.sendMessage({ text: msgText || null, attachment, linkMeta: meta, parentId: props.parentId })
   } catch (e) {
     // Сообщение реально не сохранилось на сервере — не даём тексту молча
     // пропасть: возвращаем его в поле и показываем причину

@@ -146,8 +146,9 @@ async function tryFocusMessage() {
     const el = listEl.value?.querySelector(`[data-msg-id="${target.messageId}"]`)
     if (el) {
       el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-      store.flashMessage(target.messageId)
+      if (!target.replyId) store.flashMessage(target.messageId)
     }
+    if (target.replyId) store.openThread(target.messageId, target.replyId)
   } finally {
     store.focusTarget = null
     focusBusy = false

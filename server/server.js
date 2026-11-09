@@ -263,6 +263,22 @@ function taskTitleFromMessage(msg) {
   return 'Задача из чата'
 }
 
+// ─── ТРЕДЫ ──────────────────────────────────────────────────
+app.get('/api/messages/:id/thread', (req, res) => {
+  try {
+    let parent = db.getMessageFull(Number(req.params.id))
+    if (parent?.parent_id) parent = db.getMessageFull(parent.parent_id) // открыли ответ — показываем весь тред
+    if (!parent) return res.status(404).json({ error: 'Сообщение не найдено' })
+    res.json({
+      parent:  withReactions(parent),
+      replies: db.getReplies(parent.id).map(withReactions)
+    })
+  } catch (e) {
+    console.error('thread error:', e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 app.post('/api/messages/:id/task', (req, res) => {
   try {
     const msg = db.getMessageById(Number(req.params.id))
@@ -584,22 +600,37 @@ io.on('connection', (socket) => {
   // на клиенте). Так фронт узнаёт результат отправки напрямую по этому конкретному
   // сообщению, а не гадает по общему socket.on('error') (который раньше вообще
   // никто не слушал — сообщение просто пропадало без следа при любой ошибке).
-  socket.on('message:send', ({ channelId, text, attachment, linkMeta }, ack) => {
+  socket.on('message:send', ({ channelId, text, attachment, linkMeta, parentId }, ack) => {
     try {
+      // Ответ в треде: корень должен быть в том же канале; ответ на ответ
+      // поднимаем до корня — треды плоские
+      let parent = null
+      if (parentId) {
+        parent = db.getMessageById(Number(parentId))
+        if (parent?.parent_id) parent = db.getMessageById(parent.parent_id)
+        if (!parent || parent.channel_id !== Number(channelId)) {
+          ack?.({ ok: false, error: 'Тред не найден — возможно, сообщение удалили' })
+          return
+        }
+      }
       const type = attachment ? (attachment.isImage ? 'image' : 'file') : 'text'
       const result = db.createMessage(
         channelId, socket.user.id, text || null, type,
         attachment ? JSON.stringify(attachment) : null,
-        linkMeta ? JSON.stringify(linkMeta) : null
+        linkMeta ? JSON.stringify(linkMeta) : null,
+        parent?.id || null
       )
-      // getMessages парсит JSON — берём последнее сообщение по id
-      const msgs = db.getMessages(channelId, 1)
-      const msg = msgs.find(m => m.id === result.lastInsertRowid)
+      const msg = db.getMessageFull(result.lastInsertRowid)
       if (!msg) {
         ack?.({ ok: false, error: 'Сообщение не найдено после сохранения' })
         return
       }
-      io.to(`channel:${channelId}`).emit('message:new', withReactions(msg))
+      if (parent) {
+        io.to(`channel:${channelId}`).emit('thread:reply', withReactions(msg))
+        io.to(`channel:${channelId}`).emit('message:thread', { messageId: parent.id, ...db.threadMeta(parent.id) })
+      } else {
+        io.to(`channel:${channelId}`).emit('message:new', withReactions(msg))
+      }
       ack?.({ ok: true, id: msg.id })
     } catch (e) {
       console.error('message:send error:', e)
@@ -609,13 +640,20 @@ io.on('connection', (socket) => {
   })
 
   socket.on('message:edit', ({ messageId, text, channelId }) => {
-    db.editMessage(messageId, text, socket.user.id) // WHERE user_id=? в самом запросе — чужое не отредактирует
-    io.to(`channel:${channelId}`).emit('message:edited', { messageId, text })
+    const r = db.editMessage(messageId, text, socket.user.id) // WHERE user_id=? в самом запросе — чужое не отредактирует
+    // Раньше событие улетало всем даже если в БД ничего не поменялось
+    if (r.changes) io.to(`channel:${channelId}`).emit('message:edited', { messageId, text })
   })
 
   socket.on('message:delete', ({ messageId, channelId }) => {
-    db.deleteMessage(messageId, socket.user.id) // та же защита на уровне SQL
+    const before = db.getMessageById(messageId)
+    const r = db.deleteMessage(messageId, socket.user.id) // та же защита на уровне SQL
+    if (!r.changes) return
     io.to(`channel:${channelId}`).emit('message:deleted', { messageId })
+    // Удалили ответ — пересчитываем сводку треда под корнем
+    if (before?.parent_id) {
+      io.to(`channel:${channelId}`).emit('message:thread', { messageId: before.parent_id, ...db.threadMeta(before.parent_id) })
+    }
   })
 
   socket.on('reaction:toggle', ({ messageId, emoji, channelId }) => {

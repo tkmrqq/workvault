@@ -42,7 +42,14 @@ export const useAppStore = defineStore('app', () => {
   const typingMap   = ref({})
   // Переход «к исходному сообщению» из карточки: MessageList ждёт, пока канал
   // загрузится, скроллит к сообщению и подсвечивает его (flashMsgId)
-  const focusTarget = ref(null) // { channelId, messageId }
+  const focusTarget = ref(null) // { channelId, messageId, replyId? }
+  // Открытый тред (правая панель в чате)
+  const threadParentId = ref(null)
+  const threadParent   = ref(null)
+  const threadReplies  = ref([])
+  const threadLoading  = ref(false)
+  const threadFocusId  = ref(null) // к какому ответу прокрутить после загрузки
+  let threadReq        = 0
   const flashMsgId  = ref(null)
   let flashTimer    = null
   // Фильтр вложений — свой на каждый канал, по умолчанию 'all'
@@ -214,6 +221,20 @@ export const useAppStore = defineStore('app', () => {
 
     socket.on('message:new', msg => { _pushMessage(msg) })
 
+    // Новый ответ в треде — показываем, только если этот тред сейчас открыт;
+    // счётчик под корнем обновляется отдельным message:thread
+    socket.on('thread:reply', msg => {
+      if (msg.parent_id !== threadParentId.value) return
+      if (!threadReplies.value.find(m => m.id === msg.id)) {
+        threadReplies.value = [...threadReplies.value, msg]
+        markMessageEnter(msg.id)
+      }
+    })
+
+    socket.on('message:thread', ({ messageId, ...meta }) => {
+      _patchMessage(messageId, m => ({ ...m, ...meta }))
+    })
+
     socket.on('message:edited', ({ messageId, text }) => {
       _patchMessage(messageId, m => ({ ...m, text, edited: 1 }))
     })
@@ -274,12 +295,53 @@ export const useAppStore = defineStore('app', () => {
         break
       }
     }
+    // То же сообщение может быть в открытом треде (корень или ответ)
+    const ti = threadReplies.value.findIndex(m => m.id === id)
+    if (ti !== -1) threadReplies.value = threadReplies.value.map((m, i) => i === ti ? fn(m) : m)
+    if (threadParent.value?.id === id) threadParent.value = fn(threadParent.value)
   }
 
   function _removeMessage(id) {
     for (const chId in messages.value) {
       messages.value[chId] = messages.value[chId].filter(m => m.id !== id)
     }
+    if (threadParentId.value === id) closeThread()
+    else threadReplies.value = threadReplies.value.filter(m => m.id !== id)
+  }
+
+  // ── Треды ─────────────────────────────────────────────────
+  async function openThread(parentId, focusReplyId = null) {
+    parentId = Number(parentId)
+    threadFocusId.value = focusReplyId ? Number(focusReplyId) : null
+    if (threadParentId.value === parentId && threadParent.value && !threadLoading.value) return
+    const req = ++threadReq
+    threadParentId.value = parentId
+    // Пока грузим — показываем корень из уже загруженной ленты, чтобы панель не мигала
+    threadParent.value  = (messages.value[activeChId.value] || []).find(m => m.id === parentId) || null
+    threadReplies.value = []
+    threadLoading.value = true
+    try {
+      const res = await fetch(`${API}/api/messages/${parentId}/thread`)
+      if (!res.ok) throw new Error('thread load failed')
+      const data = await res.json()
+      if (req !== threadReq) return
+      threadParentId.value = data.parent.id
+      threadParent.value   = data.parent
+      threadReplies.value  = data.replies
+    } catch {
+      if (req === threadReq) closeThread()
+    } finally {
+      if (req === threadReq) threadLoading.value = false
+    }
+  }
+
+  function closeThread() {
+    threadReq++
+    threadParentId.value = null
+    threadParent.value   = null
+    threadReplies.value  = []
+    threadLoading.value  = false
+    threadFocusId.value  = null
   }
 
   // ── API ────────────────────────────────────────────────
@@ -289,6 +351,7 @@ export const useAppStore = defineStore('app', () => {
   }
 
   async function setChannel(chId) {
+    if (threadParentId.value && chId !== activeChId.value) closeThread()
     activeChId.value = chId
     socket?.emit('channel:join', { channelId: chId })
     if (!messages.value[chId]) {
@@ -320,7 +383,7 @@ export const useAppStore = defineStore('app', () => {
   // "выстрелил и забыл": если сервер не смог сохранить сообщение (протухшая
   // сессия, невалидный channelId и т.п.), фронт об этом никак не узнавал —
   // текст уже очищался в MessageInput, и сообщение просто исчезало без следа.
-  async function sendMessage({ text, attachment, linkMeta }) {
+  async function sendMessage({ text, attachment, linkMeta, parentId = null }) {
     if (!activeChId.value || !user.value) throw new Error('Нет активного канала')
     if (!socket?.connected) throw new Error('Нет соединения с сервером — сообщение не отправлено')
     return new Promise((resolve, reject) => {
@@ -328,7 +391,8 @@ export const useAppStore = defineStore('app', () => {
         channelId:  activeChId.value,
         text:       text || null,
         attachment: attachment || null,
-        linkMeta:   linkMeta || null
+        linkMeta:   linkMeta || null,
+        parentId:   parentId || null
       }, (err, ack) => {
         // err — таймаут/дисконнект самого socket.io (см. .timeout() выше)
         if (err) return reject(new Error('Сервер не ответил — проверь соединение'))
@@ -393,8 +457,9 @@ export const useAppStore = defineStore('app', () => {
     return data
   }
 
-  function jumpToMessage(channelId, messageId) {
-    focusTarget.value = { channelId: Number(channelId), messageId: Number(messageId) }
+  // replyId — если цель внутри треда: скроллим к корню и открываем тред на нужном ответе
+  function jumpToMessage(channelId, messageId, replyId = null) {
+    focusTarget.value = { channelId: Number(channelId), messageId: Number(messageId), replyId: replyId ? Number(replyId) : null }
   }
 
   function flashMessage(id) {
@@ -426,6 +491,7 @@ export const useAppStore = defineStore('app', () => {
     sendMessage, uploadFile, unfurlUrl,
     editMessage, deleteMessage, toggleReaction, sendTyping,
     isMessageEntering,
-    createTaskFromMessage, focusTarget, jumpToMessage, flashMsgId, flashMessage
+    createTaskFromMessage, focusTarget, jumpToMessage, flashMsgId, flashMessage,
+    threadParentId, threadParent, threadReplies, threadLoading, threadFocusId, openThread, closeThread
   }
 })

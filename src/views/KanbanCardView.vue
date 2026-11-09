@@ -449,7 +449,9 @@ const sourceSnippet = computed(() => {
 function goToSourceMessage() {
   const m = card.value?.source_message
   if (!m) return
-  store.jumpToMessage(m.channel_id, m.id)
+  // Сообщение из треда — прыгаем к корню и открываем тред
+  if (m.parent_id) store.jumpToMessage(m.channel_id, m.parent_id, m.id)
+  else store.jumpToMessage(m.channel_id, m.id)
   router.push(`/chat/${m.channel_id}`)
 }
 
