@@ -6,7 +6,7 @@
       style="cursor: pointer"
       :title="msg.user_name"
     >
-      {{ msg.user_avatar }}
+      <AvatarContent :value="msg.user_avatar" :name="msg.user_name" />
     </div>
     <div class="msg-body">
       <div class="msg-meta">
@@ -107,7 +107,7 @@
         >
           <span class="ts-avatars">
             <span v-for="u in msg.reply_users || []" :key="u.id" class="ts-av"
-              :style="{ background: u.color + '22', color: u.color }" :title="u.name">{{ u.avatar }}</span>
+              :style="{ background: u.color + '22', color: u.color }" :title="u.name"><AvatarContent :value="u.avatar" :name="u.name" /></span>
           </span>
           <Transition name="tc-swap" mode="out-in">
             <span :key="msg.reply_count" class="ts-count">{{ replyLabel }}</span>

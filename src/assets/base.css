@@ -462,3 +462,13 @@ body.is-dragging * {
   user-select: none !important;
   -webkit-user-select: none !important;
 }
+
+/* Фото-аватар заполняет кружок родителя целиком */
+.av-img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}

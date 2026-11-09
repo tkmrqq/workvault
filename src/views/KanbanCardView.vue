@@ -75,7 +75,7 @@
                   <span v-if="sourceView.date" class="co-date">{{ sourceView.date }}</span>
                 </header>
                 <div class="co-msg">
-                  <span class="co-avatar" :style="{ background: sourceView.color + '22', color: sourceView.color }">{{ sourceView.avatar }}</span>
+                  <span class="co-avatar" :style="{ background: sourceView.color + '22', color: sourceView.color }"><AvatarContent :value="sourceView.avatar" :name="sourceView.author" /></span>
                   <div class="co-body">
                     <div class="co-author" :style="{ color: sourceView.color }">{{ sourceView.author }}</div>
                     <div v-if="sourceView.text" class="co-text" :class="{ clamped: sourceLong && !sourceExpanded }">{{ sourceView.text }}</div>
@@ -114,7 +114,7 @@
                   <label class="field-label">Исполнитель</label>
                   <select v-model="edit.assignee_id" class="field-select">
                     <option :value="null">— Не назначено</option>
-                    <option v-for="u in users" :key="u.id" :value="u.id">{{ u.avatar }} {{ u.name }}</option>
+                    <option v-for="u in users" :key="u.id" :value="u.id">{{ $avatarText(u.avatar) }} {{ u.name }}</option>
                   </select>
                 </div>
               </div>
@@ -143,7 +143,7 @@
                 <div v-if="card.assignee_name" class="meta-assignee">
                   <span class="assignee-avatar"
                     :style="{ background: card.assignee_color + '22', color: card.assignee_color }">
-                    {{ card.assignee_avatar }}
+                    <AvatarContent :value="card.assignee_avatar" :name="card.assignee_name" />
                   </span>
                   {{ card.assignee_name }}
                 </div>
@@ -241,7 +241,7 @@
                     <div v-if="sub.assignee_name" class="sub-card-assignee">
                       <span class="assignee-avatar-sm"
                         :style="{ background: sub.assignee_color + '22', color: sub.assignee_color }">
-                        {{ sub.assignee_avatar }}
+                        <AvatarContent :value="sub.assignee_avatar" :name="sub.assignee_name" />
                       </span>
                       {{ sub.assignee_name }}
                     </div>
@@ -293,7 +293,7 @@
                 <label class="field-label">Исполнитель</label>
                 <select v-model="subModal.assignee_id" class="field-select">
                   <option :value="null">— Не назначено</option>
-                  <option v-for="u in users" :key="u.id" :value="u.id">{{ u.avatar }} {{ u.name }}</option>
+                  <option v-for="u in users" :key="u.id" :value="u.id">{{ $avatarText(u.avatar) }} {{ u.name }}</option>
                 </select>
               </div>
             </div>

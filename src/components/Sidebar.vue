@@ -24,7 +24,7 @@
 
     <div class="user-badge" @click="showProfile = true" title="Настройки профиля">
       <span class="avatar-sm" :style="{ background: store.user?.color + '22', color: store.user?.color }">
-        {{ store.user?.avatar }}
+        <AvatarContent :value="store.user?.avatar" :name="store.user?.name" />
       </span>
       <span class="user-meta">
         <span class="user-name">{{ store.user?.name }}</span>

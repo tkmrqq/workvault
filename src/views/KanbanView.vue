@@ -157,7 +157,7 @@
                     <div v-if="card.assignee_name" class="card-assignee">
                       <span class="assignee-avatar"
                         :style="{ background: card.assignee_color + '22', color: card.assignee_color }">
-                        {{ card.assignee_avatar }}
+                        <AvatarContent :value="card.assignee_avatar" :name="card.assignee_name" />
                       </span>
                       <span class="assignee-name">{{ card.assignee_name }}</span>
                     </div>
@@ -230,7 +230,7 @@
                 <label class="field-label">Исполнитель</label>
                 <select v-model="modal.assignee_id" class="field-select">
                   <option :value="null">— Не назначено</option>
-                  <option v-for="u in users" :key="u.id" :value="u.id">{{ u.avatar }} {{ u.name }}</option>
+                  <option v-for="u in users" :key="u.id" :value="u.id">{{ $avatarText(u.avatar) }} {{ u.name }}</option>
                 </select>
               </div>
               <div class="field-group">

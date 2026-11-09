@@ -7,6 +7,8 @@ import ChatView from './views/ChatView.vue'
 import KanbanView from './views/KanbanView.vue'
 import KanbanCardView from './views/KanbanCardView.vue'
 import './assets/base.css'
+import AvatarContent from './components/AvatarContent.vue'
+import { avatarText } from './lib/avatar'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -20,6 +22,9 @@ const router = createRouter({
 
 const pinia = createPinia()
 const app = createApp(App)
+// Аватар (фото или эмодзи) нужен почти везде — регистрируем глобально
+app.component('AvatarContent', AvatarContent)
+app.config.globalProperties.$avatarText = avatarText
 app.use(pinia)
 app.use(router)
 

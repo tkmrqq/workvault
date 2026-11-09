@@ -59,7 +59,7 @@
           @mousedown.prevent="applyMention(u)" @mouseenter="mentionIndex = i"
         >
           <span class="mm-avatar" :style="{ background: (u.color || '#8a8f98') + '22', color: u.color || '#8a8f98' }">
-            {{ u.avatar }}
+            <AvatarContent :value="u.avatar" :name="u.name" />
             <span v-if="isOnline(u.id)" class="mm-online" />
           </span>
           <span class="slash-name">{{ u.name }}</span>

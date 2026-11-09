@@ -695,6 +695,15 @@ app.patch('/api/users/:id', (req, res) => {
   }
   const { name, avatar, color, description, banner } = req.body
   const b = req.body || {}
+  // Аватар — либо эмодзи, либо путь к фото, загруженному через /avatar. Чужие URL не принимаем.
+  let avatarIn = typeof avatar === 'string' ? avatar.trim() : null
+  if (avatarIn && avatarIn.includes('/')) {
+    const ok = avatarIn.startsWith('/uploads/avatar-') && !avatarIn.includes('..') && avatarIn.split('/').length === 3
+    if (!ok) avatarIn = null
+  } else if (avatarIn) {
+    avatarIn = avatarIn.slice(0, 16)
+  }
+  const prevAvatar = db.getUserById(req.params.id)?.avatar
   const clip = (v, n) => (v == null ? null : (String(v).trim().slice(0, n) || null))
   const validTz = (tz) => {
     if (!tz) return null
@@ -709,7 +718,7 @@ app.patch('/api/users/:id', (req, res) => {
         description = COALESCE(?, description),
         banner      = COALESCE(?, banner)
       WHERE id = ?
-    `).run(name || null, avatar || null, color || null,
+    `).run(name || null, avatarIn || null, color || null,
       description !== undefined ? description : null,
       banner || null, req.params.id)
 
@@ -728,11 +737,41 @@ app.patch('/api/users/:id', (req, res) => {
 
     const updated = db.getUserById(req.params.id)
     // Остальные клиенты обновят имя/аватар/статус без перезагрузки
+    // Старое фото больше нигде не нужно — удаляем, чтобы не копить мусор в uploads
+    if (prevAvatar && prevAvatar !== updated?.avatar && prevAvatar.startsWith('/uploads/avatar-')) {
+      fs.unlink(path.join(UPLOADS_DIR, path.basename(prevAvatar)), () => {})
+    }
     io.emit('user:updated', updated)
     res.json(updated)
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
+})
+
+// ─── AVATAR UPLOAD ──────────────────────────────────────
+// Клиент уже кадрирует и сжимает фото до 320×320, поэтому лимит небольшой.
+// В БД фото попадает только через PATCH /api/users/:id (поле avatar).
+const AVATAR_MIME = { 'image/webp': '.webp', 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif' }
+const avatarUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_, __, cb) => cb(null, UPLOADS_DIR),
+    filename: (req, file, cb) => cb(null, `avatar-${Number(req.params.id)}-${Date.now()}${AVATAR_MIME[file.mimetype] || '.png'}`)
+  }),
+  limits: { fileSize: 4 * 1024 * 1024, files: 1 },
+  fileFilter: (_, file, cb) => AVATAR_MIME[file.mimetype]
+    ? cb(null, true)
+    : cb(new Error('Нужна картинка: PNG, JPG, WebP или GIF'), false)
+})
+
+app.post('/api/users/:id/avatar', (req, res) => {
+  if (!req.user || (Number(req.params.id) !== req.user.id && req.user.role !== 'admin')) {
+    return res.status(403).json({ error: 'Можно менять только свой аватар' })
+  }
+  avatarUpload.single('file')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Файл больше 4 МБ' : err.message })
+    if (!req.file) return res.status(400).json({ error: 'Файл не получен' })
+    res.json({ url: `/uploads/${req.file.filename}` })
+  })
 })
 
 app.get('/api/users/:id/stats', (req, res) => {

@@ -1,219 +1,312 @@
 <template>
   <Teleport to="body">
-    <div class="modal-overlay" @click.self="emit('close')">
-      <div class="modal" :class="{ 'slide-in': mounted }">
+    <div class="pm-overlay" :class="{ shown: mounted }" @mousedown.self="requestClose">
+      <div class="pm" :class="{ shown: mounted, 'pm-edit': !viewOnly }" role="dialog" aria-modal="true">
 
-        <button class="close-btn" @click="emit('close')" aria-label="Закрыть">
-          <X :size="14" :stroke-width="2.5" />
-        </button>
+        <!-- ═══════════════ ПРОСМОТР ═══════════════ -->
+        <template v-if="viewOnly">
+          <div class="pv-banner" :class="'banner-' + (u.banner || 'violet')"><div class="banner-pattern" /></div>
+          <button class="pm-close on-banner" @click="emit('close')" aria-label="Закрыть">
+            <X :size="15" :stroke-width="2.5" />
+          </button>
 
-        <!-- ═══ Banner + Avatar (shared) ═══ -->
-        <div class="banner" :class="'banner-' + (viewOnly ? (user.banner || 'violet') : (form.banner || 'violet'))">
-          <div class="banner-pattern"></div>
-        </div>
-
-        <div class="identity-block">
-          <div class="avatar-wrapper">
-            <div class="avatar-ring" :style="{ background: (viewOnly ? user.color : form.color) + '26' }"></div>
-            <div class="profile-avatar-big"
-              :style="{
-                background: (viewOnly ? user.color : form.color) + '1f',
-                color: viewOnly ? user.color : form.color,
-                borderColor: (viewOnly ? user.color : form.color) + '55'
-              }">
-              {{ viewOnly ? user.avatar : form.avatar }}
+          <div class="pv-head">
+            <div class="pv-avatar" :style="avatarStyle(u.color)">
+              <AvatarContent :value="u.avatar" :name="u.name" />
+              <span v-if="isOnline" class="online-dot" title="Онлайн" />
             </div>
-            <span v-if="isOnline" class="status-dot" title="Онлайн"></span>
-            <span v-if="activeStatus?.emoji" class="avatar-status" :title="activeStatus.text">{{ activeStatus.emoji }}</span>
-          </div>
-        </div>
-
-        <!-- ═══ Просмотр чужого профиля ═══ -->
-        <div v-if="viewOnly" class="profile-view">
-          <h2 class="profile-name" :style="{ color: user.color }">{{ user.name }}</h2>
-          <p v-if="user.title" class="profile-title">{{ user.title }}</p>
-          <div v-if="activeStatus" class="status-pill">
-            <span>{{ activeStatus.emoji || '💬' }}</span>
-            <span v-if="activeStatus.text" class="sp-text">{{ activeStatus.text }}</span>
-            <span v-if="activeStatus.until" class="sp-until">до {{ activeStatus.until }}</span>
-          </div>
-
-          <p v-if="user.description" class="profile-desc">{{ user.description }}</p>
-          <p v-else class="profile-desc empty">Пользователь пока ничего не рассказал о себе</p>
-
-          <div class="meta-row">
-            <Calendar :size="13" :stroke-width="2" />
-            <span>В системе с {{ formatDate(user.created_at) }}</span>
-          </div>
-          <div v-if="localTime" class="meta-row">
-            <Clock :size="13" :stroke-width="2" />
-            <span>Местное время {{ localTime.time }}<template v-if="localTime.diff"> · {{ localTime.diff }}</template></span>
-          </div>
-          <div v-if="stats?.last_message_at" class="meta-row faint">
-            <MessageSquare :size="13" :stroke-width="2" />
-            <span>Последнее сообщение {{ relTime(stats.last_message_at) }}</span>
-          </div>
-
-          <div v-if="stats" class="stats-grid">
-            <div class="stat"><b>{{ stats.messages }}</b><span>{{ plural(stats.messages, ['сообщение', 'сообщения', 'сообщений']) }}</span></div>
-            <div class="stat"><b>{{ stats.tasks_open }}</b><span>задач в работе</span></div>
-            <div class="stat"><b>{{ stats.tasks_done }}</b><span>закрыто</span></div>
-          </div>
-
-          <div v-if="user.id !== store.user?.id" class="profile-actions">
-            <button type="button" class="pa-btn" @click="mention">
-              <AtSign :size="14" :stroke-width="2" /> Упомянуть
-            </button>
-          </div>
-        </div>
-
-        <!-- ═══ Редактирование своего профиля ═══ -->
-        <div v-else class="profile-edit">
-          <div class="edit-header">
-            <h2>Настройки профиля</h2>
-            <p class="edit-subtitle">Так тебя будут видеть другие участники</p>
-          </div>
-
-          <div class="field-group">
-            <label>
-              <Smile :size="14" :stroke-width="2" />
-              Статус
-            </label>
-            <div class="status-row">
-              <button type="button" class="status-emoji-btn" :class="{ empty: !form.status_emoji }"
-                @click="emojiOpen = !emojiOpen" title="Выбрать эмодзи">{{ form.status_emoji || '🙂' }}</button>
-              <input v-model="form.status_text" maxlength="80" class="field-input" placeholder="Что у тебя сейчас?" />
-              <button v-if="form.status_text || form.status_emoji" type="button" class="status-clear"
-                @click="clearStatus" title="Сбросить статус">
-                <X :size="13" :stroke-width="2.5" />
+            <div v-if="!isSelf" class="pv-actions">
+              <button type="button" class="btn btn-primary" @click="mention">
+                <AtSign :size="15" :stroke-width="2.2" /> Упомянуть
               </button>
             </div>
-            <div v-if="emojiOpen" class="status-emojis">
-              <button v-for="e in STATUS_EMOJIS" :key="e" type="button"
-                :class="{ active: form.status_emoji === e }"
-                @click="form.status_emoji = e; emojiOpen = false">{{ e }}</button>
+          </div>
+
+          <div class="pv-body">
+            <h2 class="pv-name">{{ u.name }}</h2>
+            <p v-if="u.title" class="pv-title">{{ u.title }}</p>
+
+            <div v-if="activeStatus" class="status-pill">
+              <span class="sp-emoji">{{ activeStatus.emoji || '💬' }}</span>
+              <span v-if="activeStatus.text" class="sp-text">{{ activeStatus.text }}</span>
+              <span v-if="activeStatus.until" class="sp-until">до {{ activeStatus.until }}</span>
             </div>
-            <div class="status-presets">
-              <button v-for="p in STATUS_PRESETS" :key="p.text" type="button" class="preset"
-                @click="applyPreset(p)">{{ p.emoji }} {{ p.text }}</button>
+
+            <p v-if="u.description" class="pv-desc">{{ u.description }}</p>
+
+            <dl class="pv-info">
+              <div v-if="localTime" class="pv-info-row">
+                <dt><Clock :size="14" :stroke-width="2" /> Местное время</dt>
+                <dd>{{ localTime.time }}<span v-if="localTime.diff" class="muted"> · {{ localTime.diff }}</span></dd>
+              </div>
+              <div v-if="stats?.last_message_at" class="pv-info-row">
+                <dt><MessageSquare :size="14" :stroke-width="2" /> Последнее сообщение</dt>
+                <dd>{{ relTime(stats.last_message_at) }}</dd>
+              </div>
+              <div class="pv-info-row">
+                <dt><Calendar :size="14" :stroke-width="2" /> В команде с</dt>
+                <dd>{{ formatDate(u.created_at) }}</dd>
+              </div>
+            </dl>
+
+            <div class="pv-stats" :class="{ loading: !stats }">
+              <div class="stat">
+                <b>{{ stats ? stats.messages : '—' }}</b>
+                <span>{{ stats ? plural(stats.messages, ['сообщение', 'сообщения', 'сообщений']) : 'сообщений' }}</span>
+              </div>
+              <div class="stat">
+                <b>{{ stats ? stats.tasks_open : '—' }}</b>
+                <span>в работе</span>
+              </div>
+              <div class="stat">
+                <b>{{ stats ? stats.tasks_done : '—' }}</b>
+                <span>закрыто</span>
+              </div>
             </div>
-            <div v-if="form.status_text || form.status_emoji" class="status-until">
-              <span>Сбросить</span>
-              <select v-model="form.until" class="field-input field-select">
-                <option v-for="o in untilOptions" :key="o[0]" :value="o[0]">{{ o[1] }}</option>
-              </select>
+          </div>
+        </template>
+
+        <!-- ═══════════════ НАСТРОЙКИ ═══════════════ -->
+        <template v-else>
+          <header class="pe-head">
+            <div>
+              <h2>Настройки профиля</h2>
+              <p>Так тебя видят другие участники</p>
+            </div>
+            <button class="pm-close" @click="requestClose" aria-label="Закрыть">
+              <X :size="15" :stroke-width="2.5" />
+            </button>
+          </header>
+
+          <!-- Живое превью карточки -->
+          <div class="pe-preview">
+            <div class="pp-banner" :class="'banner-' + form.banner"><div class="banner-pattern" /></div>
+            <div class="pp-row">
+              <button type="button" class="pp-avatar" :class="{ over: dragOver }" :style="avatarStyle(form.color)"
+                title="Загрузить фото" @click="pickFile"
+                @dragenter.prevent="dragOver = true" @dragover.prevent="dragOver = true"
+                @dragleave.prevent="dragOver = false" @drop.prevent="onDrop">
+                <AvatarContent :value="previewAvatar" :name="form.name" />
+                <span class="pp-avatar-overlay"><Camera :size="18" :stroke-width="2" /></span>
+              </button>
+              <div class="pp-text">
+                <div class="pp-name" :style="{ color: form.color }">{{ form.name.trim() || 'Без имени' }}</div>
+                <div class="pp-sub">
+                  <span v-if="form.title.trim()">{{ form.title }}</span>
+                  <span v-if="form.status_emoji || form.status_text.trim()" class="pp-status">
+                    {{ form.status_emoji }} {{ form.status_text }}
+                  </span>
+                  <span v-if="!form.title.trim() && !form.status_emoji && !form.status_text.trim()" class="muted">
+                    Добавь должность или статус
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div class="field-group">
-            <label>
-              <Palette :size="14" :stroke-width="2" />
-              Фон профиля
-            </label>
-            <div class="banner-row">
-              <button v-for="b in banners" :key="b"
-                class="banner-pick" :class="['banner-' + b, { active: form.banner === b }]"
-                @click="form.banner = b" :title="bannerLabels[b]" :aria-label="bannerLabels[b]" />
-            </div>
+          <nav class="pe-tabs" role="tablist">
+            <button v-for="t in TABS" :key="t.id" type="button" role="tab"
+              class="pe-tab" :class="{ active: tab === t.id }" :aria-selected="tab === t.id" @click="tab = t.id">
+              <component :is="t.icon" :size="14" :stroke-width="2" />
+              <span>{{ t.label }}</span>
+            </button>
+            <span class="pe-ink" :style="{ transform: `translateX(${tabIndex * 100}%)` }" />
+          </nav>
+
+          <div class="pe-body">
+            <Transition name="pe-fade" mode="out-in">
+
+              <!-- ── Профиль ── -->
+              <section v-if="tab === 'profile'" key="profile" class="pe-section">
+                <div class="field">
+                  <span class="field-label">Аватар</span>
+                  <div class="avatar-tools">
+                    <button type="button" class="btn btn-soft" @click="pickFile">
+                      <Upload :size="14" :stroke-width="2.2" /> {{ hasPhoto ? 'Заменить фото' : 'Загрузить фото' }}
+                    </button>
+                    <button v-if="hasPhoto" type="button" class="btn btn-ghost danger" @click="removePhoto">
+                      <Trash2 :size="14" :stroke-width="2.2" /> Убрать
+                    </button>
+                  </div>
+                  <p class="field-hint">PNG, JPG, WebP или GIF. Картинку можно перетащить прямо на аватар.</p>
+                  <div class="emoji-grid" :class="{ dim: hasPhoto }">
+                    <button v-for="a in EMOJI_AVATARS" :key="a" type="button" class="emoji-pick"
+                      :class="{ active: !hasPhoto && form.avatar === a }" @click="pickEmoji(a)">{{ a }}</button>
+                  </div>
+                </div>
+
+                <div class="field-pair">
+                  <div class="field">
+                    <label class="field-label" for="pf-name">Имя <span class="count">{{ form.name.length }}/24</span></label>
+                    <input id="pf-name" v-model="form.name" maxlength="24" class="input"
+                      :class="{ invalid: touched && !form.name.trim() }" placeholder="Как тебя зовут" @blur="touched = true" />
+                    <span v-if="touched && !form.name.trim()" class="field-error">Имя не может быть пустым</span>
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="pf-title">Должность</label>
+                    <input id="pf-title" v-model="form.title" maxlength="40" class="input" placeholder="Например, дизайнер" />
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label class="field-label" for="pf-about">О себе
+                    <span class="count" :class="{ warn: form.description.length > 100 }">{{ form.description.length }}/120</span>
+                  </label>
+                  <textarea id="pf-about" v-model="form.description" maxlength="120" rows="2" class="input textarea"
+                    placeholder="Пара слов о себе" />
+                </div>
+
+                <div class="field">
+                  <label class="field-label" for="pf-tz">Часовой пояс</label>
+                  <div class="select-wrap">
+                    <Globe :size="14" :stroke-width="2" class="select-icon" />
+                    <select id="pf-tz" v-model="form.timezone" class="input select with-icon">
+                      <option v-for="o in tzOptions" :key="o.tz" :value="o.tz">{{ o.label }}</option>
+                    </select>
+                  </div>
+                  <p class="field-hint">Коллеги увидят твоё местное время в профиле.</p>
+                </div>
+              </section>
+
+              <!-- ── Статус ── -->
+              <section v-else-if="tab === 'status'" key="status" class="pe-section">
+                <div class="field">
+                  <span class="field-label">Текущий статус</span>
+                  <div class="status-input">
+                    <button type="button" class="status-emoji" :class="{ empty: !form.status_emoji }"
+                      @click="emojiOpen = !emojiOpen" title="Выбрать эмодзи">{{ form.status_emoji || '🙂' }}</button>
+                    <input v-model="form.status_text" maxlength="80" class="status-text" placeholder="Что у тебя сейчас?" />
+                    <button v-if="form.status_text || form.status_emoji" type="button" class="status-clear"
+                      @click="clearStatus" title="Сбросить статус">
+                      <X :size="13" :stroke-width="2.5" />
+                    </button>
+                  </div>
+                  <Transition name="pe-pop">
+                    <div v-if="emojiOpen" class="status-emojis">
+                      <button v-for="e in STATUS_EMOJIS" :key="e" type="button"
+                        :class="{ active: form.status_emoji === e }"
+                        @click="form.status_emoji = e; emojiOpen = false">{{ e }}</button>
+                    </div>
+                  </Transition>
+                </div>
+
+                <div class="field">
+                  <span class="field-label">Быстрый выбор</span>
+                  <div class="preset-list">
+                    <button v-for="p in STATUS_PRESETS" :key="p.text" type="button" class="preset"
+                      :class="{ active: form.status_text === p.text && form.status_emoji === p.emoji }" @click="applyPreset(p)">
+                      <span class="preset-emoji">{{ p.emoji }}</span>
+                      <span class="preset-text">{{ p.text }}</span>
+                      <span class="preset-until">{{ untilLabel(p.until) }}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="field" :class="{ disabled: !form.status_text && !form.status_emoji }">
+                  <label class="field-label" for="pf-until">Сбросить статус</label>
+                  <div class="select-wrap">
+                    <Clock :size="14" :stroke-width="2" class="select-icon" />
+                    <select id="pf-until" v-model="form.until" class="input select with-icon"
+                      :disabled="!form.status_text && !form.status_emoji">
+                      <option v-for="o in untilOptions" :key="o[0]" :value="o[0]">{{ o[1] }}</option>
+                    </select>
+                  </div>
+                </div>
+              </section>
+
+              <!-- ── Оформление ── -->
+              <section v-else-if="tab === 'look'" key="look" class="pe-section">
+                <div class="field">
+                  <span class="field-label">Фон профиля</span>
+                  <div class="banner-grid">
+                    <button v-for="b in BANNERS" :key="b.id" type="button" class="banner-tile"
+                      :class="['banner-' + b.id, { active: form.banner === b.id }]" @click="form.banner = b.id">
+                      <span class="bt-label">{{ b.label }}</span>
+                      <span v-if="form.banner === b.id" class="bt-check"><Check :size="12" :stroke-width="3" /></span>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <span class="field-label">Цвет имени</span>
+                  <div class="color-row">
+                    <button v-for="c in COLORS" :key="c" type="button" class="color-dot"
+                      :class="{ active: form.color === c }" :style="{ '--c': c }" @click="form.color = c" :aria-label="c">
+                      <Check v-if="form.color === c" :size="13" :stroke-width="3" />
+                    </button>
+                  </div>
+                  <p class="field-hint">Используется для имени в чате и фона эмодзи-аватара.</p>
+                </div>
+              </section>
+
+              <!-- ── Аккаунт ── -->
+              <section v-else key="account" class="pe-section">
+                <div class="acc-card">
+                  <div class="acc-row">
+                    <span class="acc-k">В команде с</span>
+                    <span class="acc-v">{{ formatDate(user.created_at) }}</span>
+                  </div>
+                  <div class="acc-row">
+                    <span class="acc-k">Роль</span>
+                    <span class="acc-v">{{ user.role === 'admin' ? 'Администратор' : 'Участник' }}</span>
+                  </div>
+                </div>
+
+                <button type="button" class="acc-action" @click="switchAccount">
+                  <span class="acc-icon"><RefreshCw :size="16" :stroke-width="2" /></span>
+                  <span class="acc-text"><b>Сменить аккаунт</b><small>Выйти и войти под другим пользователем</small></span>
+                  <ChevronRight :size="16" :stroke-width="2" class="acc-chev" />
+                </button>
+                <button type="button" class="acc-action danger" @click="logout">
+                  <span class="acc-icon"><LogOut :size="16" :stroke-width="2" /></span>
+                  <span class="acc-text"><b>Выйти</b><small>Завершить сессию на этом устройстве</small></span>
+                  <ChevronRight :size="16" :stroke-width="2" class="acc-chev" />
+                </button>
+              </section>
+            </Transition>
           </div>
 
-          <div class="field-group">
-            <label>
-              <Smile :size="14" :stroke-width="2" />
-              Аватар
-            </label>
-            <div class="avatar-row">
-              <button v-for="a in avatars" :key="a"
-                class="avatar-pick" :class="{ active: form.avatar === a }"
-                @click="form.avatar = a">{{ a }}</button>
-            </div>
-          </div>
-
-          <div class="field-group">
-            <label>
-              <Paintbrush :size="14" :stroke-width="2" />
-              Цвет акцента
-            </label>
-            <div class="color-row">
-              <button v-for="c in colors" :key="c"
-                class="color-dot" :class="{ active: form.color === c }"
-                :style="{ background: c, boxShadow: form.color === c ? `0 0 0 3px ${c}33` : 'none' }"
-                @click="form.color = c" />
-            </div>
-          </div>
-
-          <div class="field-group">
-            <label>
-              <Pencil :size="14" :stroke-width="2" />
-              Имя
-            </label>
-            <input v-model="form.name" maxlength="24" class="field-input"
-              :class="{ 'field-error': touched && !form.name?.trim() }"
-              placeholder="Твоё имя..." @blur="touched = true" />
-            <span v-if="touched && !form.name?.trim()" class="error-text">Имя не может быть пустым</span>
-          </div>
-
-          <div class="field-group">
-            <label>
-              <Briefcase :size="14" :stroke-width="2" />
-              Должность
-            </label>
-            <input v-model="form.title" maxlength="40" class="field-input" placeholder="Например, дизайнер" />
-          </div>
-
-          <div class="field-group">
-            <label>
-              <MessageCircle :size="14" :stroke-width="2" />
-              О себе
-            </label>
-            <textarea v-model="form.description" maxlength="120" class="field-input field-textarea"
-              placeholder="Пара слов о себе..." rows="3" />
-            <span class="char-count" :class="{ warn: (form.description?.length || 0) > 100 }">
-              {{ form.description?.length || 0 }}/120
+          <footer class="pe-foot">
+            <span class="pe-hint" :class="{ err: !!error, dirty: dirty && !error }">
+              {{ error || (dirty ? 'Есть несохранённые изменения' : '') }}
             </span>
-          </div>
-
-          <div class="field-group">
-            <label>
-              <Globe :size="14" :stroke-width="2" />
-              Часовой пояс
-            </label>
-            <select v-model="form.timezone" class="field-input field-select">
-              <option v-for="o in tzOptions" :key="o.tz" :value="o.tz">{{ o.label }}</option>
-            </select>
-          </div>
-
-          <div class="modal-footer">
-            <button class="btn-ghost" @click="switchAccount" title="Сменить аккаунт">
-              <RefreshCw :size="15" :stroke-width="2" />
+            <button type="button" class="btn btn-ghost" @click="requestClose">Отмена</button>
+            <button type="button" class="btn btn-primary" :disabled="!dirty || saving || !form.name.trim()"
+              :title="(isMac ? '⌘' : 'Ctrl') + ' + Enter'" @click="save">
+              <span v-if="saving" class="spinner" />
+              <Check v-else :size="15" :stroke-width="2.5" />
+              Сохранить
             </button>
-            <button class="btn-ghost btn-danger" @click="logout" title="Выйти">
-              <LogOut :size="15" :stroke-width="2" />
-            </button>
+          </footer>
 
-            <div class="footer-spacer"></div>
+          <input ref="fileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden @change="onFileInput" />
 
-            <button class="btn-save" :disabled="saving || !form.name?.trim()" @click="save" title="Сохранить">
-              <span v-if="saving" class="spinner"></span>
-              <Check v-else :size="16" :stroke-width="2.5" />
-            </button>
-          </div>
-        </div>
+          <Transition name="pe-fade">
+            <div v-if="cropFile" class="crop-layer" @mousedown.self="cropFile = null">
+              <div class="crop-card">
+                <h3>Фото профиля</h3>
+                <p>Перетащи и приблизь, чтобы выбрать область</p>
+                <AvatarCropper :file="cropFile" @cancel="cropFile = null" @done="onCropped" />
+              </div>
+            </div>
+          </Transition>
+        </template>
       </div>
     </div>
   </Teleport>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { getApiBase } from '@/lib/apiBase'
+import { isImageAvatar } from '@/lib/avatar'
 import { confirmDialog } from '@/composables/useConfirm'
+import AvatarCropper from './AvatarCropper.vue'
 import {
-  X, Calendar, Palette, Smile, Paintbrush,
-  Pencil, MessageCircle, RefreshCw, LogOut, Check,
-  Briefcase, Clock, Globe, AtSign, MessageSquare
+  X, Calendar, Clock, Globe, AtSign, MessageSquare, Camera, Upload, Trash2,
+  RefreshCw, LogOut, Check, ChevronRight, User, Smile, Palette, Shield
 } from 'lucide-vue-next'
 
 const props = defineProps({
@@ -224,63 +317,117 @@ const emit = defineEmits(['close', 'updated'])
 
 const store   = useAppStore()
 const router  = useRouter()
-const saving  = ref(false)
 const mounted = ref(false)
+const saving  = ref(false)
 const touched = ref(false)
+const error   = ref('')
+const isMac   = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform || '')
 
-const avatars = ['🧑','👩','👨','🧔','👩‍💻','👨‍💻','🦊','🐼','🐻','🐸','🤖','👾']
-const colors  = ['#7c6af7','#4caf7d','#e8956d','#e06c75','#e8af34','#61afef','#c678dd','#56b6c2']
-const banners = ['violet','forest','sunset','ocean','rose','mono']
-const bannerLabels = {
-  violet: 'Фиолетовый', forest: 'Лесной', sunset: 'Закат',
-  ocean: 'Океан', rose: 'Розовый', mono: 'Монохром'
+// В режиме просмотра соединяем то, что передали (часто только имя/аватар из
+// сообщения), с полной и актуальной карточкой из store — она обновляется по сокету.
+const u = computed(() => ({ ...props.user, ...(store.usersById?.[props.user.id] || {}) }))
+const isSelf = computed(() => props.user.id === store.user?.id)
+const isOnline = computed(() => store.onlineList?.some?.(o => o.userId === props.user.id) ?? false)
+
+const TABS = [
+  { id: 'profile', label: 'Профиль',    icon: User },
+  { id: 'status',  label: 'Статус',     icon: Smile },
+  { id: 'look',    label: 'Вид',        icon: Palette },
+  { id: 'account', label: 'Аккаунт',    icon: Shield }
+]
+const tab = ref('profile')
+const tabIndex = computed(() => Math.max(0, TABS.findIndex(t => t.id === tab.value)))
+
+const EMOJI_AVATARS = ['🧑', '👩', '👨', '🧔', '👩‍💻', '👨‍💻', '🦊', '🐼', '🐻', '🐸', '🤖', '👾', '🐱', '🦉', '🐙', '🌵']
+const COLORS  = ['#7c6af7', '#4caf7d', '#e8956d', '#e06c75', '#e8af34', '#61afef', '#c678dd', '#56b6c2']
+const BANNERS = [
+  { id: 'violet', label: 'Фиолетовый' }, { id: 'forest', label: 'Лес' },    { id: 'sunset', label: 'Закат' },
+  { id: 'ocean',  label: 'Океан' },      { id: 'rose',   label: 'Розовый' }, { id: 'mono',   label: 'Моно' }
+]
+
+function initForm() {
+  const p = props.user
+  return {
+    name:         p.name || '',
+    avatar:       p.avatar || EMOJI_AVATARS[0],
+    color:        p.color || COLORS[0],
+    description:  p.description || '',
+    banner:       p.banner || 'violet',
+    title:        p.title || '',
+    timezone:     p.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+    status_emoji: p.status_emoji || '',
+    status_text:  p.status_text || '',
+    until:        p.status_until ? 'keep' : ''
+  }
+}
+const form = reactive(initForm())
+const initialSnapshot = JSON.stringify(initForm())
+
+// ── Аватар ──
+const fileInput  = ref(null)
+const cropFile   = ref(null)
+const dragOver   = ref(false)
+const pendingBlob = ref(null)
+const pendingUrl  = ref('')
+const lastEmoji = isImageAvatar(props.user.avatar) ? EMOJI_AVATARS[0] : (props.user.avatar || EMOJI_AVATARS[0])
+
+const previewAvatar = computed(() => pendingUrl.value || form.avatar)
+const hasPhoto = computed(() => !!pendingUrl.value || isImageAvatar(form.avatar))
+const dirty = computed(() => !!pendingBlob.value || JSON.stringify({ ...form }) !== initialSnapshot)
+
+function clearPending() {
+  if (pendingUrl.value) URL.revokeObjectURL(pendingUrl.value)
+  pendingUrl.value = ''
+  pendingBlob.value = null
+}
+function pickFile() { fileInput.value?.click() }
+function acceptFile(f) {
+  error.value = ''
+  if (!f) return
+  if (!/^image\/(png|jpeg|webp|gif)$/.test(f.type)) { error.value = 'Нужна картинка: PNG, JPG, WebP или GIF'; return }
+  if (f.size > 15 * 1024 * 1024) { error.value = 'Картинка больше 15 МБ'; return }
+  cropFile.value = f
+}
+function onFileInput(e) { acceptFile(e.target.files?.[0]); e.target.value = '' }
+function onDrop(e) { dragOver.value = false; acceptFile(e.dataTransfer?.files?.[0]) }
+function onCropped(blob) {
+  clearPending()
+  pendingBlob.value = blob
+  pendingUrl.value = URL.createObjectURL(blob)
+  cropFile.value = null
+}
+function pickEmoji(e) { clearPending(); form.avatar = e }
+function removePhoto() {
+  clearPending()
+  if (isImageAvatar(form.avatar)) form.avatar = lastEmoji
 }
 
-const form = reactive({
-  name:        props.user.name,
-  avatar:      props.user.avatar,
-  color:       props.user.color,
-  description: props.user.description || '',
-  banner:      props.user.banner || 'violet',
-  title:        props.user.title || '',
-  timezone:     props.user.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
-  status_emoji: props.user.status_emoji || '',
-  status_text:  props.user.status_text || '',
-  until:        props.user.status_until ? 'keep' : ''
-})
-
-// store.onlineList хранит { userId, userName, channelId } для каждого пользователя,
-// онлайн-статус профиля не привязан к конкретному каналу — проверяем по всем записям
-const isOnline = computed(() => {
-  return store.onlineList?.some?.(u => u.userId === props.user.id) ?? false
-})
-
-onMounted(() => setTimeout(() => mounted.value = true, 10))
-
 // ── Статус ──
-const STATUS_EMOJIS = ['💬', '📅', '🎯', '🚌', '🍽️', '🤒', '🌴', '🏠', '🎧', '☕', '🔥', '✅']
+const STATUS_EMOJIS = ['💬', '📅', '🎯', '🚌', '🍽️', '🤒', '🌴', '🏠', '🎧', '☕', '🔥', '✅', '📚', '🛠️', '✈️', '🌙']
 const STATUS_PRESETS = [
   { emoji: '📅', text: 'На встрече',          until: '1h' },
   { emoji: '🎯', text: 'Фокус, не отвлекать', until: '4h' },
   { emoji: '🚌', text: 'В пути',              until: '1h' },
   { emoji: '🍽️', text: 'Обед',                until: '1h' },
   { emoji: '🤒', text: 'Болею',               until: 'today' },
-  { emoji: '🌴', text: 'В отпуске',           until: 'week' },
+  { emoji: '🌴', text: 'В отпуске',           until: 'week' }
 ]
+const UNTIL_LABELS = { '': 'Не сбрасывать', '1h': 'Через час', '4h': 'Через 4 часа', today: 'В конце дня', week: 'Через неделю' }
+const UNTIL_SHORT  = { '': '', '1h': '1 ч', '4h': '4 ч', today: 'до вечера', week: 'неделя' }
+function untilLabel(k) { return UNTIL_SHORT[k] || '' }
+
 const emojiOpen = ref(false)
 const now = ref(Date.now())
 const tick = setInterval(() => { now.value = Date.now() }, 30000)
-onUnmounted(() => clearInterval(tick))
 
 function fmtUntil(ts) {
   const d = new Date(ts * 1000)
-  const sameDay = d.toDateString() === new Date().toDateString()
-  return sameDay
+  return d.toDateString() === new Date().toDateString()
     ? d.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })
     : d.toLocaleString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 const untilOptions = computed(() => {
-  const opts = [['', 'Не сбрасывать'], ['1h', 'Через час'], ['4h', 'Через 4 часа'], ['today', 'В конце дня'], ['week', 'Через неделю']]
+  const opts = Object.entries(UNTIL_LABELS)
   if (props.user.status_until) opts.unshift(['keep', 'Как сейчас — до ' + fmtUntil(props.user.status_until)])
   return opts
 })
@@ -294,16 +441,16 @@ function untilTs(opt) {
   return null
 }
 function applyPreset(p) { form.status_emoji = p.emoji; form.status_text = p.text; form.until = p.until; emojiOpen.value = false }
-function clearStatus()  { form.status_emoji = ''; form.status_text = ''; form.until = '' }
+function clearStatus()  { form.status_emoji = ''; form.status_text = ''; form.until = ''; emojiOpen.value = false }
 
 const activeStatus = computed(() => {
-  const u = props.user
-  if (!u || !(u.status_text || u.status_emoji)) return null
-  if (u.status_until && u.status_until * 1000 < now.value) return null
-  return { emoji: u.status_emoji, text: u.status_text || '', until: u.status_until ? fmtUntil(u.status_until) : '' }
+  const x = u.value
+  if (!x || !(x.status_text || x.status_emoji)) return null
+  if (x.status_until && x.status_until * 1000 < now.value) return null
+  return { emoji: x.status_emoji, text: x.status_text || '', until: x.status_until ? fmtUntil(x.status_until) : '' }
 })
 
-// ── Часовой пояс и местное время ──
+// ── Часовой пояс ──
 const myTz = Intl.DateTimeFormat().resolvedOptions().timeZone
 function tzOffsetMin(tz, d = new Date()) {
   try {
@@ -321,23 +468,24 @@ const tzOptions = computed(() => {
   try { list = Intl.supportedValuesOf('timeZone') } catch { }
   if (!list.length) list = ['Europe/Minsk', 'Europe/Moscow', 'Europe/Kyiv', 'Europe/Warsaw', 'Europe/Berlin', 'Europe/London', 'Asia/Almaty', 'Asia/Tbilisi', 'America/New_York', 'UTC']
   if (!list.includes(form.timezone)) list = [form.timezone, ...list]
-  return list.map(tz => {
-    const m = tzOffsetMin(tz)
-    if (m == null) return { tz, label: tz }
-    const a = Math.abs(m)
-    const off = (m >= 0 ? '+' : '−') + String(Math.floor(a / 60)).padStart(2, '0') + ':' + String(a % 60).padStart(2, '0')
-    return { tz, label: 'UTC' + off + ' · ' + tz.replace(/_/g, ' ') }
-  })
+  return list
+    .map(tz => ({ tz, off: tzOffsetMin(tz) ?? 0 }))
+    .sort((a, b) => a.off - b.off || a.tz.localeCompare(b.tz))
+    .map(({ tz, off }) => {
+      const a = Math.abs(off)
+      const s = (off >= 0 ? '+' : '−') + String(Math.floor(a / 60)).padStart(2, '0') + ':' + String(a % 60).padStart(2, '0')
+      return { tz, label: `UTC${s} · ${tz.replace(/_/g, ' ')}` }
+    })
 })
 const localTime = computed(() => {
-  const tz = props.user?.timezone
+  const tz = u.value?.timezone
   if (!tz) return null
   const d = new Date(now.value)
   let time
   try { time = d.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit', timeZone: tz }) } catch { return null }
   let diff = ''
   const a = tzOffsetMin(tz, d), b = tzOffsetMin(myTz, d)
-  if (a != null && b != null && a !== b && props.user.id !== store.user?.id) {
+  if (a != null && b != null && a !== b && !isSelf.value) {
     const h = (a - b) / 60
     diff = (h > 0 ? '+' : '−') + String(Math.abs(h)).replace('.', ',') + ' ч от тебя'
   }
@@ -346,19 +494,23 @@ const localTime = computed(() => {
 
 // ── Статистика ──
 const stats = ref(null)
-onMounted(async () => {
+async function loadStats() {
   if (!props.viewOnly || !props.user?.id) return
   try {
     const r = await fetch(`${getApiBase()}/api/users/${props.user.id}/stats`)
     if (r.ok) stats.value = await r.json()
   } catch { /* офлайн — просто без статистики */ }
-})
+}
 function plural(n, f) {
   const a = Math.abs(n) % 100, b = a % 10
   if (a > 10 && a < 20) return f[2]
   if (b > 1 && b < 5) return f[1]
   if (b === 1) return f[0]
   return f[2]
+}
+function formatDate(ts) {
+  if (!ts) return '—'
+  return new Date(ts * 1000).toLocaleDateString('ru', { day: 'numeric', month: 'long', year: 'numeric' })
 }
 function relTime(ts) {
   const d = new Date(ts * 1000)
@@ -369,26 +521,41 @@ function relTime(ts) {
   if (d.getTime() >= start - 86400000) return 'вчера в ' + time
   return formatDate(ts)
 }
+function avatarStyle(c) {
+  const col = c || COLORS[0]
+  return { background: col + '24', color: col }
+}
 function mention() {
-  store.insertIntoComposer('@' + props.user.name + ' ', null)
+  store.insertIntoComposer('@' + u.value.name + ' ', null)
   emit('close')
 }
 
+// ── Сохранение / закрытие ──
 async function save() {
   touched.value = true
-  if (!form.name?.trim() || saving.value) return
+  if (!form.name.trim() || saving.value || !dirty.value) return
   saving.value = true
+  error.value = ''
   try {
     const API = getApiBase()
+    let avatar = form.avatar
+    if (pendingBlob.value) {
+      const fd = new FormData()
+      fd.append('file', pendingBlob.value, pendingBlob.value.type === 'image/webp' ? 'avatar.webp' : 'avatar.png')
+      const r = await fetch(`${API}/api/users/${props.user.id}/avatar`, { method: 'POST', body: fd })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || !j.url) throw new Error(j.error || 'Не удалось загрузить фото')
+      avatar = j.url
+    }
     const res = await fetch(`${API}/api/users/${props.user.id}`, {
       method:  'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
-        name:        form.name.trim(),
-        avatar:      form.avatar,
-        color:       form.color,
-        description: form.description,
-        banner:      form.banner,
+        name:         form.name.trim(),
+        avatar,
+        color:        form.color,
+        description:  form.description,
+        banner:       form.banner,
         title:        form.title,
         timezone:     form.timezone,
         status_emoji: form.status_emoji,
@@ -396,12 +563,41 @@ async function save() {
         status_until: untilTs(form.until)
       })
     })
-    const updated = await res.json()
-    store.user = updated
+    const updated = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(updated.error || 'Не удалось сохранить')
+    clearPending()
+    store.user = { ...store.user, ...updated }
     emit('updated', updated)
     emit('close')
+  } catch (e) {
+    error.value = e.message || 'Не удалось сохранить'
   } finally {
     saving.value = false
+  }
+}
+
+let closing = false
+async function requestClose() {
+  if (closing) return
+  if (!props.viewOnly && dirty.value) {
+    closing = true
+    const ok = await confirmDialog('Закрыть без сохранения? Изменения пропадут.')
+    closing = false
+    if (!ok) return
+  }
+  clearPending()
+  emit('close')
+}
+
+function onKey(e) {
+  if (closing) return
+  if (e.key === 'Escape') {
+    if (cropFile.value) { cropFile.value = null; return }
+    if (emojiOpen.value) { emojiOpen.value = false; return }
+    requestClose()
+  } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !props.viewOnly) {
+    e.preventDefault()
+    save()
   }
 }
 
@@ -410,7 +606,6 @@ async function switchAccount() {
   emit('close')
   router.push('/')
 }
-
 async function logout() {
   if (!await confirmDialog('Выйти из аккаунта?')) return
   await store.logout()
@@ -418,57 +613,66 @@ async function logout() {
   router.push('/')
 }
 
-function formatDate(ts) {
-  if (!ts) return '—'
-  return new Date(ts * 1000).toLocaleDateString('ru', { day: 'numeric', month: 'long', year: 'numeric' })
-}
+onMounted(() => {
+  requestAnimationFrame(() => { mounted.value = true })
+  window.addEventListener('keydown', onKey)
+  loadStats()
+})
+onUnmounted(() => {
+  clearInterval(tick)
+  window.removeEventListener('keydown', onKey)
+  if (pendingUrl.value) URL.revokeObjectURL(pendingUrl.value)
+})
 </script>
 
 <style scoped>
-.modal-overlay {
+/* ── Оверлей и каркас ── */
+.pm-overlay {
   position: fixed; inset: 0; z-index: 200;
-  background: oklch(0 0 0 / 0.6);
   display: flex; align-items: center; justify-content: center;
   padding: var(--space-4);
-  backdrop-filter: blur(4px);
+  background: oklch(0 0 0 / 0);
+  backdrop-filter: blur(0);
+  transition: background .22s ease, backdrop-filter .22s ease;
 }
-.modal {
+.pm-overlay.shown { background: oklch(0 0 0 / 0.55); backdrop-filter: blur(4px); }
+
+.pm {
   position: relative;
-  width: min(440px, 100%);
-  max-height: 88vh;
+  width: min(400px, 100%);
+  max-height: min(720px, 90vh);
+  display: flex; flex-direction: column;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg);
-  overflow-y: auto;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  opacity: 0; transform: translateY(12px) scale(.98);
-  transition: opacity .25s ease, transform .25s ease;
-}
-.modal::-webkit-scrollbar { display: none; }
-.modal.slide-in { opacity: 1; transform: translateY(0) scale(1); }
-
-.close-btn {
-  position: absolute; top: var(--space-3); right: var(--space-3); z-index: 10;
-  width: 30px; height: 30px; border-radius: var(--radius-full);
-  color: #fff;
-  background: oklch(0 0 0 / 0.28);
-  display: flex; align-items: center; justify-content: center;
-  transition: all var(--transition);
-}
-.close-btn:hover { background: oklch(0 0 0 / 0.45); transform: scale(1.06); }
-
-/* ── Banner ── */
-.banner {
-  position: relative;
-  height: 108px; width: 100%;
   overflow: hidden;
+  opacity: 0;
+  transform: translateY(10px) scale(.975);
+  transition: opacity .24s var(--ease-out, ease), transform .28s var(--ease-out, ease);
 }
+.pm.shown { opacity: 1; transform: none; }
+.pm.pm-edit { width: min(500px, 100%); }
+
+.pm-close {
+  flex: none;
+  width: 30px; height: 30px; border-radius: var(--radius-full);
+  display: grid; place-items: center;
+  color: var(--text-muted);
+  transition: background .15s ease, color .15s ease, transform .15s ease;
+}
+.pm-close:hover { background: var(--hover); color: var(--text); }
+.pm-close.on-banner {
+  position: absolute; top: 12px; right: 12px; z-index: 3;
+  color: #fff; background: oklch(0 0 0 / 0.28);
+}
+.pm-close.on-banner:hover { background: oklch(0 0 0 / 0.45); color: #fff; }
+
+/* ── Баннеры ── */
 .banner-pattern {
   position: absolute; inset: 0;
-  background-image: radial-gradient(circle at 20% 30%, oklch(1 0 0 / 0.14) 0, transparent 45%),
-                     radial-gradient(circle at 80% 70%, oklch(1 0 0 / 0.10) 0, transparent 40%);
+  background-image: radial-gradient(circle at 20% 30%, oklch(1 0 0 / 0.16) 0, transparent 45%),
+                    radial-gradient(circle at 85% 75%, oklch(1 0 0 / 0.10) 0, transparent 40%);
 }
 .banner-violet { background: linear-gradient(135deg, #6a5adf, #b968d4); }
 .banner-forest { background: linear-gradient(135deg, #276549, #4caf7d); }
@@ -477,249 +681,406 @@ function formatDate(ts) {
 .banner-rose   { background: linear-gradient(135deg, #9c3b53, #e06c75); }
 .banner-mono   { background: linear-gradient(135deg, #33333a, #6b6b73); }
 
-/* ── Identity ── */
-.identity-block {
-  display: flex; justify-content: center;
-  margin-top: -44px;
+/* ── Общие кнопки ── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 34px; padding: 0 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  font-size: var(--text-sm); font-weight: 600;
+  white-space: nowrap;
+  transition: background .15s ease, color .15s ease, border-color .15s ease, opacity .15s ease, transform .1s ease;
+}
+.btn:active:not(:disabled) { transform: scale(.98); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover, var(--accent)); }
+.btn-soft { background: var(--surface-2); border-color: var(--border); color: var(--text); }
+.btn-soft:hover { background: var(--hover); }
+.btn-ghost { color: var(--text-muted); }
+.btn-ghost:hover { background: var(--hover); color: var(--text); }
+.btn-ghost.danger { color: var(--danger, #e06c75); }
+.btn-ghost.danger:hover { background: color-mix(in oklab, var(--danger, #e06c75) 12%, transparent); }
+.muted { color: var(--text-faint); }
+
+/* ═════ Просмотр ═════ */
+.pm:not(.pm-edit) { overflow-y: auto; scrollbar-width: none; }
+.pv-banner { position: relative; flex: none; height: 104px; }
+.pv-head {
+  display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-3);
+  padding: 0 var(--space-5);
+  margin-top: -40px;
   position: relative; z-index: 2;
 }
-.avatar-wrapper { position: relative; }
-.avatar-ring {
-  position: absolute;
-  width: 92px; height: 92px;
-  border-radius: var(--radius-full);
-  top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 0;
-}
-.profile-avatar-big {
-  position: relative; z-index: 1;
-  width: 84px; height: 84px; border-radius: var(--radius-full);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 2.1rem;
-  background: var(--surface);
-  border: 3px solid var(--surface);
-  box-shadow: var(--shadow-md);
-  transition: all var(--transition);
-}
-.status-dot {
-  position: absolute; bottom: 2px; right: 2px; z-index: 2;
-  width: 16px; height: 16px; border-radius: var(--radius-full);
-  background: #4caf7d;
-  border: 3px solid var(--surface);
-}
-
-/* ── View mode ── */
-.profile-view {
-  padding: var(--space-4) var(--space-6) var(--space-8);
-  display: flex; flex-direction: column; align-items: center; gap: var(--space-2);
-  text-align: center;
-}
-.profile-name { font-size: var(--text-lg); font-weight: 700; margin-top: var(--space-1); }
-.profile-desc { font-size: var(--text-sm); color: var(--text-muted); max-width: 300px; line-height: 1.5; }
-.profile-desc.empty { color: var(--text-faint); font-style: italic; }
-.meta-row {
-  display: flex; align-items: center; gap: var(--space-2);
-  font-size: var(--text-xs); color: var(--text-faint);
-  margin-top: var(--space-3); padding-top: var(--space-3);
-  border-top: 1px solid var(--divider); width: 100%;
-  justify-content: center;
-}
-
-/* ── Edit mode ── */
-.profile-edit {
-  padding: var(--space-4) var(--space-6) var(--space-6);
-  display: flex; flex-direction: column; gap: var(--space-5);
-}
-.edit-header { text-align: center; margin-top: var(--space-1); }
-.edit-header h2 { font-size: var(--text-base); font-weight: 700; }
-.edit-subtitle { font-size: var(--text-xs); color: var(--text-faint); margin-top: 2px; }
-
-.field-group { display: flex; flex-direction: column; gap: var(--space-2); }
-.field-group label {
-  display: flex; align-items: center; gap: 6px;
-  font-size: var(--text-xs); font-weight: 600; color: var(--text-muted);
-  text-transform: uppercase; letter-spacing: .05em;
-}
-.field-group label svg { flex-shrink: 0; opacity: .85; }
-
-.banner-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.banner-pick {
-  width: 44px; height: 26px; border-radius: var(--radius-sm);
-  border: 2px solid transparent; transition: all var(--transition);
+.pv-avatar {
   position: relative;
-}
-.banner-pick:hover { transform: scale(1.08); }
-.banner-pick.active { border-color: var(--text); box-shadow: var(--shadow-sm); }
-
-.avatar-row { display: flex; flex-wrap: wrap; gap: var(--space-1); }
-.avatar-pick {
-  width: 38px; height: 38px; border-radius: var(--radius-md); font-size: 1.15rem;
-  border: 2px solid transparent; background: var(--surface-3);
-  transition: all var(--transition);
-}
-.avatar-pick:hover { background: var(--hover); transform: translateY(-1px); }
-.avatar-pick.active { border-color: var(--accent); background: var(--accent-soft); }
-
-.color-row { display: flex; gap: var(--space-2); flex-wrap: wrap; }
-.color-dot {
-  width: 24px; height: 24px; border-radius: var(--radius-full);
-  border: 2px solid transparent; transition: transform var(--transition), border-color var(--transition);
-}
-.color-dot:hover { transform: scale(1.15); }
-.color-dot.active { border-color: var(--text); transform: scale(1.18); }
-
-.error-text { font-size: 11px; color: #e06c75; font-weight: 600; }
-.char-count { font-size: 11px; color: var(--text-faint); text-align: right; }
-.char-count.warn { color: #e8af34; font-weight: 600; }
-
-/* ── Footer: единый ряд ── */
-.modal-footer {
-  display: flex; align-items: center; gap: var(--space-2);
-  padding-top: var(--space-4);
-  border-top: 1px solid var(--divider);
-}
-.footer-spacer { flex: 1; }
-
-.btn-ghost {
-  display: flex; align-items: center; justify-content: center;
-  width: 38px; height: 38px; border-radius: var(--radius-md);
-  border: 1px solid var(--border); background: var(--surface-3); color: var(--text-muted);
-  transition: all var(--transition);
-  flex-shrink: 0;
-}
-.btn-ghost:hover { background: var(--hover); color: var(--text); }
-.btn-ghost.btn-danger { color: #e06c75; background: rgba(224,108,117,.08); border-color: rgba(224,108,117,.2); }
-.btn-ghost.btn-danger:hover { background: rgba(224,108,117,.16); }
-
-.btn-save {
-  display: flex; align-items: center; justify-content: center;
-  width: 38px; height: 38px; border-radius: var(--radius-md);
-  background: var(--accent); color: white; border: none;
-  transition: all var(--transition);
-  flex-shrink: 0;
-}
-.btn-save:hover:not(:disabled) { background: var(--accent-hover, var(--accent)); }
-.btn-save:disabled { opacity: .45; cursor: not-allowed; }
-
-.spinner {
-  width: 14px; height: 14px; border-radius: 50%;
-  border: 2px solid rgba(255,255,255,.4); border-top-color: #fff;
-  animation: spin .6s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-
-@media (prefers-reduced-motion: reduce) {
-  .modal, .close-btn, .avatar-pick, .color-dot, .banner-pick, .spinner { transition: none; animation: none; }
-}
-
-/* ── Статус, должность, статистика ── */
-.avatar-status {
-  position: absolute; top: -4px; right: -6px;
-  width: 28px; height: 28px;
+  width: 84px; height: 84px; border-radius: 50%;
   display: grid; place-items: center;
-  font-size: 15px; line-height: 1;
-  background: var(--surface);
-  border: 2px solid var(--surface);
-  border-radius: 50%;
+  font-size: 2.2rem;
+  border: 4px solid var(--surface);
+  background-clip: padding-box;
   box-shadow: var(--shadow-sm);
-  animation: statIn .3s var(--ease-out, ease) both;
 }
-.profile-title { margin: 2px 0 0; font-size: var(--text-sm); font-weight: 500; color: var(--text-muted); }
+.pv-avatar .online-dot {
+  position: absolute; right: 2px; bottom: 2px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #4caf7d; border: 3px solid var(--surface);
+}
+.pv-actions { padding-bottom: 6px; }
+.pv-body {
+  padding: var(--space-3) var(--space-5) var(--space-5);
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+}
+.pv-name { font-size: var(--text-lg); font-weight: 700; line-height: 1.25; color: var(--text); }
+.pv-title { font-size: var(--text-sm); color: var(--text-muted); margin-top: -4px; }
+.pv-desc { font-size: var(--text-sm); color: var(--text); line-height: 1.5; margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 .status-pill {
   display: inline-flex; align-items: center; gap: 6px;
   max-width: 100%;
-  margin-top: 10px; padding: 5px 12px;
+  margin-top: 4px; padding: 4px 10px 4px 8px;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-full, 999px);
-  font-size: var(--text-sm); color: var(--text);
+  border-radius: var(--radius-full);
+  font-size: var(--text-sm);
 }
-.status-pill .sp-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-pill .sp-until { flex: none; font-size: 11px; color: var(--text-faint); }
-.meta-row.faint { color: var(--text-faint); }
-.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
+.sp-emoji { line-height: 1; }
+.sp-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-until { flex: none; font-size: 11px; color: var(--text-faint); }
+
+.pv-info {
+  width: 100%;
+  margin: var(--space-3) 0 0;
+  border-top: 1px solid var(--divider);
+}
+.pv-info-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+  padding: 9px 0;
+  border-bottom: 1px solid var(--divider);
+  font-size: var(--text-sm);
+}
+.pv-info-row dt { display: inline-flex; align-items: center; gap: 8px; color: var(--text-muted); }
+.pv-info-row dt svg { color: var(--text-faint); }
+.pv-info-row dd { margin: 0; color: var(--text); text-align: right; }
+
+.pv-stats { width: 100%; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: var(--space-3); }
 .stat {
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-  padding: 10px 6px;
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  padding: 10px 4px;
   background: var(--surface-2);
-  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  animation: statIn .35s var(--ease-out, ease) both;
+  transition: opacity .25s ease;
 }
-.stat:nth-child(2) { animation-delay: .05s; }
-.stat:nth-child(3) { animation-delay: .1s; }
-.stat b { font-size: 18px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
-.stat span { font-size: 11px; color: var(--text-faint); text-align: center; }
-@keyframes statIn { from { opacity: 0; transform: translateY(6px); } }
-.profile-actions { display: flex; gap: 8px; margin-top: 16px; }
-.pa-btn {
-  flex: 1;
+.pv-stats.loading .stat { opacity: .5; }
+.stat b { font-size: 17px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+.stat span { font-size: 11px; color: var(--text-faint); }
+
+/* ═════ Настройки ═════ */
+.pe-head {
+  flex: none;
+  display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3);
+  padding: var(--space-4) var(--space-4) var(--space-3) var(--space-5);
+}
+.pe-head h2 { font-size: var(--text-base); font-weight: 700; color: var(--text); }
+.pe-head p { font-size: var(--text-xs); color: var(--text-faint); margin-top: 2px; }
+
+.pe-preview {
+  flex: none;
+  margin: 0 var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.pp-banner { position: relative; height: 44px; transition: background .3s ease; }
+.pp-row { display: flex; align-items: flex-end; gap: var(--space-3); padding: 0 var(--space-3) var(--space-3); margin-top: -24px; position: relative; }
+.pp-avatar {
+  position: relative; flex: none;
+  width: 64px; height: 64px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 1.75rem;
+  border: 3px solid var(--surface-2);
+  background-clip: padding-box;
+  cursor: pointer;
+  transition: transform .18s var(--ease-out, ease), box-shadow .18s ease;
+}
+.pp-avatar:hover { transform: scale(1.03); }
+.pp-avatar.over { box-shadow: 0 0 0 3px var(--accent); transform: scale(1.06); }
+.pp-avatar-overlay {
+  position: absolute; inset: 0; border-radius: 50%;
+  display: grid; place-items: center;
+  color: #fff; background: oklch(0 0 0 / 0.45);
+  opacity: 0; transition: opacity .15s ease;
+}
+.pp-avatar:hover .pp-avatar-overlay, .pp-avatar.over .pp-avatar-overlay, .pp-avatar:focus-visible .pp-avatar-overlay { opacity: 1; }
+.pp-text { min-width: 0; padding-bottom: 4px; }
+.pp-name { font-weight: 700; font-size: var(--text-base); line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color .2s ease; }
+.pp-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: var(--text-xs); color: var(--text-muted); margin-top: 2px; }
+.pp-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+
+/* Вкладки */
+.pe-tabs {
+  flex: none;
+  position: relative;
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  margin: var(--space-4) var(--space-5) 0;
+  padding: 3px;
+  background: var(--surface-2);
+  border-radius: var(--radius-md);
+}
+.pe-tab {
+  position: relative; z-index: 1;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 9px 12px;
+  height: 30px;
+  font-size: 13px; font-weight: 600;
+  color: var(--text-muted);
+  border-radius: calc(var(--radius-md) - 2px);
+  transition: color .18s ease;
+}
+.pe-tab:hover { color: var(--text); }
+.pe-tab.active { color: var(--text); }
+.pe-ink {
+  position: absolute; top: 3px; left: 3px; bottom: 3px;
+  width: calc((100% - 6px) / 4);
+  background: var(--surface);
+  border-radius: calc(var(--radius-md) - 2px);
+  box-shadow: var(--shadow-sm);
+  transition: transform .28s var(--ease-spring, cubic-bezier(.3, 1.3, .5, 1));
+}
+
+.pe-body {
+  flex: 1; min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-5);
+  scrollbar-width: thin;
+}
+.pe-section { display: flex; flex-direction: column; gap: var(--space-5); }
+
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; transition: opacity .2s ease; }
+.field.disabled { opacity: .5; }
+.field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+.field-label {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  font-size: 12px; font-weight: 600; color: var(--text-muted);
+}
+.count { font-weight: 500; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.count.warn { color: var(--warning, #e8af34); }
+.field-hint { font-size: 12px; color: var(--text-faint); line-height: 1.4; }
+.field-error { font-size: 12px; color: var(--danger, #e06c75); font-weight: 600; }
+
+.input {
+  width: 100%;
+  height: 36px; padding: 0 10px;
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   color: var(--text);
-  font: inherit; font-size: var(--text-sm); font-weight: 600;
-  cursor: pointer;
-  transition: background .15s ease, border-color .15s ease, color .15s ease;
+  font: inherit; font-size: var(--text-sm);
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
 }
-.pa-btn:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.input::placeholder { color: var(--text-faint); }
+.input:hover { border-color: color-mix(in oklab, var(--border) 60%, var(--text-faint)); }
+.input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); background: var(--surface); }
+.input.invalid { border-color: var(--danger, #e06c75); }
+.textarea { height: auto; padding: 8px 10px; resize: none; line-height: 1.45; }
+.select { cursor: pointer; }
+.select-wrap { position: relative; }
+.select-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-faint); pointer-events: none; }
+.select.with-icon { padding-left: 32px; }
 
-.status-row { display: flex; align-items: center; gap: 8px; }
-.status-row .field-input { flex: 1; min-width: 0; }
-.status-emoji-btn {
-  flex: none; width: 40px; height: 40px;
-  display: grid; place-items: center;
+/* Аватар */
+.avatar-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.emoji-grid {
+  display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px;
+  margin-top: 4px;
+  transition: opacity .2s ease;
+}
+.emoji-grid.dim { opacity: .55; }
+.emoji-grid.dim:hover { opacity: 1; }
+.emoji-pick {
+  aspect-ratio: 1; border-radius: var(--radius-md);
+  font-size: 1.2rem;
+  border: 1.5px solid transparent;
+  transition: background .15s ease, border-color .15s ease, transform .15s var(--ease-out, ease);
+}
+.emoji-pick:hover { background: var(--hover); transform: translateY(-1px); }
+.emoji-pick.active { border-color: var(--accent); background: var(--accent-soft); }
+
+/* Статус */
+.status-input {
+  display: flex; align-items: center; gap: 4px;
+  height: 40px; padding: 0 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.status-input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.status-emoji {
+  flex: none; width: 32px; height: 32px; border-radius: var(--radius-md);
   font-size: 18px; line-height: 1;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: transform .15s var(--ease-out, ease);
+  transition: background .15s ease, transform .15s ease;
 }
-.status-emoji-btn.empty { opacity: .6; }
-.status-emoji-btn:hover { transform: scale(1.06); }
+.status-emoji:hover { background: var(--hover); transform: scale(1.06); }
+.status-emoji.empty { opacity: .55; }
+.status-text {
+  flex: 1; min-width: 0; height: 100%;
+  background: transparent; border: 0; outline: none;
+  color: var(--text); font: inherit; font-size: var(--text-sm);
+}
+.status-text::placeholder { color: var(--text-faint); }
 .status-clear {
-  flex: none; width: 30px; height: 30px;
+  flex: none; width: 26px; height: 26px; border-radius: 50%;
   display: grid; place-items: center;
-  background: transparent; border: 0; border-radius: 50%;
-  color: var(--text-faint); cursor: pointer;
+  color: var(--text-faint);
+  transition: background .15s ease, color .15s ease;
 }
-.status-clear:hover { background: var(--surface-2); color: var(--text); }
+.status-clear:hover { background: var(--hover); color: var(--text); }
 .status-emojis {
-  display: flex; flex-wrap: wrap; gap: 4px;
-  margin-top: 8px; padding: 6px;
+  display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px;
+  padding: 6px;
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  animation: statIn .2s var(--ease-out, ease);
+  transform-origin: top left;
 }
-.status-emojis button {
-  width: 32px; height: 32px;
-  background: transparent; border: 0;
-  border-radius: var(--radius-md);
-  font-size: 17px; cursor: pointer;
-}
+.status-emojis button { aspect-ratio: 1; border-radius: var(--radius-md); font-size: 17px; transition: background .12s ease; }
 .status-emojis button:hover, .status-emojis button.active { background: var(--accent-soft); }
-.status-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+.preset-list { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .preset {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 4px 10px;
-  background: transparent;
+  display: flex; align-items: center; gap: 8px;
+  height: 38px; padding: 0 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-full, 999px);
-  color: var(--text-muted);
-  font: inherit; font-size: 12px;
-  cursor: pointer;
-  transition: background .15s ease, border-color .15s ease, color .15s ease;
+  border-radius: var(--radius-md);
+  text-align: left;
+  font-size: var(--text-sm); color: var(--text);
+  transition: background .15s ease, border-color .15s ease;
 }
-.preset:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-.status-until { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--text-muted); }
-.status-until .field-input { flex: 1; }
-.field-select { appearance: auto; cursor: pointer; }
+.preset:hover { background: var(--hover); }
+.preset.active { border-color: var(--accent); background: var(--accent-soft); }
+.preset-emoji { flex: none; font-size: 15px; }
+.preset-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preset-until { flex: none; font-size: 11px; color: var(--text-faint); }
+
+/* Оформление */
+.banner-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.banner-tile {
+  position: relative;
+  height: 56px; border-radius: var(--radius-md);
+  display: flex; align-items: flex-end;
+  padding: 6px 8px;
+  outline: 2px solid transparent; outline-offset: 2px;
+  transition: transform .18s var(--ease-out, ease), outline-color .15s ease;
+}
+.banner-tile:hover { transform: translateY(-2px); }
+.banner-tile.active { outline-color: var(--accent); }
+.bt-label { font-size: 11px; font-weight: 600; color: #fff; text-shadow: 0 1px 2px oklch(0 0 0 / 0.35); }
+.bt-check {
+  position: absolute; top: 6px; right: 6px;
+  width: 18px; height: 18px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: #fff; color: #222;
+  animation: pop .22s var(--ease-spring, ease) both;
+}
+.color-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.color-dot {
+  width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--c); color: #fff;
+  box-shadow: 0 0 0 0 var(--c);
+  transition: transform .15s var(--ease-out, ease), box-shadow .15s ease;
+}
+.color-dot:hover { transform: scale(1.1); }
+.color-dot.active { box-shadow: 0 0 0 3px var(--surface), 0 0 0 5px var(--c); }
+.color-dot svg { animation: pop .22s var(--ease-spring, ease) both; }
+@keyframes pop { from { transform: scale(.4); opacity: 0; } }
+
+/* Аккаунт */
+.acc-card { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+.acc-row { display: flex; justify-content: space-between; gap: var(--space-3); padding: 10px 12px; font-size: var(--text-sm); }
+.acc-row + .acc-row { border-top: 1px solid var(--divider); }
+.acc-k { color: var(--text-muted); }
+.acc-v { color: var(--text); font-weight: 500; }
+.acc-action {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  text-align: left;
+  transition: background .15s ease, border-color .15s ease;
+}
+.pe-section > .acc-action { margin-top: calc(var(--space-5) * -0.6); }
+.pe-section > .acc-card + .acc-action { margin-top: 0; }
+.acc-action:hover { background: var(--hover); }
+.acc-icon {
+  flex: none; width: 32px; height: 32px; border-radius: var(--radius-md);
+  display: grid; place-items: center;
+  background: var(--surface-2); color: var(--text-muted);
+}
+.acc-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.acc-text b { font-size: var(--text-sm); font-weight: 600; color: var(--text); }
+.acc-text small { font-size: 12px; color: var(--text-faint); }
+.acc-chev { color: var(--text-faint); transition: transform .15s ease; }
+.acc-action:hover .acc-chev { transform: translateX(2px); }
+.acc-action.danger .acc-icon { color: var(--danger, #e06c75); background: color-mix(in oklab, var(--danger, #e06c75) 12%, transparent); }
+.acc-action.danger b { color: var(--danger, #e06c75); }
+
+/* Футер */
+.pe-foot {
+  flex: none;
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--divider);
+  background: var(--surface);
+}
+.pe-hint { flex: 1; min-width: 0; font-size: 12px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pe-hint.dirty { color: var(--text-muted); }
+.pe-hint.err { color: var(--danger, #e06c75); font-weight: 600; }
+.spinner {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid oklch(1 0 0 / 0.4); border-top-color: #fff;
+  animation: spin .6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Кадрирование */
+.crop-layer {
+  position: absolute; inset: 0; z-index: 5;
+  display: grid; place-items: center;
+  padding: var(--space-4);
+  background: color-mix(in oklab, var(--surface) 82%, transparent);
+  backdrop-filter: blur(6px);
+}
+.crop-card {
+  width: min(320px, 100%);
+  padding: var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+.crop-card h3 { font-size: var(--text-base); font-weight: 700; color: var(--text); }
+.crop-card p { font-size: 12px; color: var(--text-faint); margin: 2px 0 var(--space-4); }
+
+/* Переходы */
+.pe-fade-enter-active, .pe-fade-leave-active { transition: opacity .16s ease, transform .16s var(--ease-out, ease); }
+.pe-fade-enter-from { opacity: 0; transform: translateY(6px); }
+.pe-fade-leave-to   { opacity: 0; transform: translateY(-4px); }
+.pe-pop-enter-active, .pe-pop-leave-active { transition: opacity .15s ease, transform .18s var(--ease-out, ease); }
+.pe-pop-enter-from, .pe-pop-leave-to { opacity: 0; transform: scale(.96) translateY(-4px); }
+
+@media (max-width: 480px) {
+  .pm-overlay { padding: 0; align-items: flex-end; }
+  .pm, .pm.pm-edit { width: 100%; max-height: 94vh; border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
+  .pe-tab svg { display: none; }
+  .field-pair, .preset-list { grid-template-columns: 1fr; }
+  .emoji-grid, .status-emojis { grid-template-columns: repeat(6, 1fr); }
+}
 @media (prefers-reduced-motion: reduce) {
-  .stat, .avatar-status, .status-emojis { animation: none; }
+  .pm, .pm-overlay, .pe-ink, .pp-avatar, .banner-tile, .color-dot, .emoji-pick { transition: none; }
+  .pe-fade-enter-active, .pe-fade-leave-active, .pe-pop-enter-active, .pe-pop-leave-active { transition: none; }
+  .bt-check, .color-dot svg, .spinner { animation: none; }
 }
 </style>
