@@ -79,36 +79,43 @@
         </div>
 
         <!-- Board -->
-        <div class="kanban-board" :class="{ 'board-wide': uiPreferences.kanbanWide }" v-if="board.length">
+        <div class="kanban-board" :class="{ 'board-wide': uiPreferences.kanbanWide, 'no-anim': !uiPreferences.animationsEnabled }" v-if="board.length">
           <div
-            v-for="col in visibleBoard"
+            v-for="(col, colIdx) in visibleBoard"
             :key="col.id"
             class="kanban-col"
-            @dragover.prevent="onColDragOver($event, col)"
-            @drop.prevent="onDrop($event, col.id)"
-            :class="{ 'drag-over': dragOverInfo.colId === col.id }"
+            :data-col-id="col.id"
+            :style="{ '--i': colIdx }"
+            :class="{ 'drag-over': kanbanDrag.isOver(col) && String(col.id) !== kanbanDrag.state.fromColId }"
           >
             <!-- Column header -->
             <div class="col-header">
               <div class="col-dot" :style="{ background: col.color }"></div>
               <span class="col-title">{{ col.title }}</span>
               <span v-if="col.is_terminal" class="col-terminal-badge" title="Завершённые карточки из этой колонки автоматически уедут в архив"><Check :size="10" :stroke-width="3" /> авто-архив</span>
-              <span class="col-count">{{ col.visibleCards.length }}<template v-if="hasActiveFilters"> / {{ col.cards.length }}</template></span>
+              <Transition name="bump" mode="out-in" :css="uiPreferences.animationsEnabled">
+                <span class="col-count" :key="`${col.visibleCards.length}/${col.cards.length}`">{{ col.visibleCards.length }}<template v-if="hasActiveFilters"> / {{ col.cards.length }}</template></span>
+              </Transition>
               <button class="col-add-btn" @click="openCreate(col.id)" title="Добавить карточку"><Plus :size="15" :stroke-width="2.5" /></button>
             </div>
 
             <!-- Cards -->
             <div class="col-cards">
-              <div v-if="dragOverInfo.colId === col.id && col.cards.length" class="drop-line" :style="{ top: dragOverInfo.y + 'px' }"></div>
-              <TransitionGroup name="k-card" tag="div" class="col-cards-list" :css="uiPreferences.animationsEnabled" @before-leave="positionLeavingCard">
-              <div v-if="!col.visibleCards.length" :key="`empty-${col.id}`" class="col-empty-drop" :class="{ 'drag-over': dragOverInfo.colId === col.id }">{{ hasActiveFilters && col.cards.length ? 'Нет задач по фильтру' : 'Перетащите сюда' }}</div>
+              <TransitionGroup name="k-card" tag="div" class="col-cards-list" :css="uiPreferences.animationsEnabled && !kanbanDrag.state.instant" @before-leave="positionLeavingCard">
+              <div v-if="!kanbanDrag.renderCards(col).length" :key="`empty-${col.id}`" class="col-empty-drop">{{ hasActiveFilters && col.cards.length ? 'Нет задач по фильтру' : 'Перетащите сюда' }}</div>
+              <template v-for="card in kanbanDrag.renderCards(col)" :key="card.id">
               <div
-                v-for="card in col.visibleCards" :key="card.id"
+                v-if="card.placeholder"
+                class="card-placeholder"
+                :style="{ height: kanbanDrag.state.height + 'px' }"
+                aria-hidden="true"
+              ></div>
+              <div
+                v-else
                 class="kanban-card"
-                :draggable="sortBy === 'manual' && !hasActiveFilters"
-                @dragstart="onDragStart($event, card)"
-                @dragend="onDragEnd"
-                :class="{ dragging: draggingCard?.id === card.id }"
+                :data-card-id="card.id"
+                :class="{ 'can-drag': sortBy === 'manual' && !hasActiveFilters }"
+                @pointerdown="kanbanDrag.onPointerDown($event, card, col.id)"
                 @click="openEdit(card)"
               >
                 <div
@@ -127,7 +134,7 @@
                     <span>Готово</span>
                   </span>
                 </div>
-                  <div v-if="sortBy === 'manual' && !hasActiveFilters" class="card-drag-handle" @mousedown="dragHandleGrabbed = true" title="Потяни, чтобы переместить">
+                  <div v-if="sortBy === 'manual' && !hasActiveFilters" class="card-drag-handle" title="Потяни, чтобы переместить">
                     <GripVertical :size="13" :stroke-width="2" />
                   </div>
                   <div class="card-top-row">
@@ -157,6 +164,7 @@
                     <div v-else class="card-assignee-empty">Не назначено</div>
                   </div>
               </div>
+              </template>
               </TransitionGroup>
             </div>
           </div>
@@ -347,6 +355,7 @@ import WorkspaceModal from '@/components/WorkspaceModal.vue'
 import { resolveWorkspaceIcon } from '@/lib/workspaceIcons'
 import { getApiBase } from '@/lib/apiBase'
 import { uiPreferences } from '@/composables/useUiPreferences'
+import { useKanbanDrag } from '@/composables/useKanbanDrag'
 import {
   Archive, Plus, X, Check, Calendar, RotateCcw,
   LayoutDashboard, ArrowDown, ArrowRight, ArrowUp,
@@ -512,10 +521,14 @@ const visibleBoard = computed(() => board.value.map(col => ({
 })))
 
 // ─── Drag & Drop ─────────────────────────────────────────
-const draggingCard = ref(null)
-const dragOverInfo  = reactive({ colId: null, index: null, y: 0 })
+// Pointer-based DnD: призрак с наклоном, слот на месте вставки, автоскролл.
+// Вся механика — в composables/useKanbanDrag.js, здесь только применение переноса.
+const kanbanDrag = useKanbanDrag({
+  canDrag: () => sortBy.value === 'manual' && !hasActiveFilters.value,
+  animated: () => !!uiPreferences.animationsEnabled,
+  onDrop: (card, colId, index) => { moveCard(card, colId, index) }
+})
 
-const dragHandleGrabbed = ref(false)
 const terminalFlashIds = ref({})
 
 function flashTerminalDone(cardId) {
@@ -528,79 +541,25 @@ function flashTerminalDone(cardId) {
   }, 1100)
 }
 
-function onDragStart(e, card) {
-  if (hasActiveFilters.value || !dragHandleGrabbed.value) { e.preventDefault(); return }
-  draggingCard.value = card
-  e.dataTransfer.effectAllowed = 'move'
-  // Firefox не начнёт drag без setData — Chrome/Electron обычно и без этого работают,
-  // но лучше подстраховаться для кросс-браузерности
-  e.dataTransfer.setData('text/plain', String(card.id))
-}
-function onDragEnd() {
-  draggingCard.value = null
-  dragOverInfo.colId = null
-  dragOverInfo.index = null
-  dragHandleGrabbed.value = false
-}
-// Единый обработчик на колонку. Раньше был ещё отдельный на каждую карточку,
-// но плейсхолдер-вставка сам оказывался под курсором и перехватывал dragover,
-// сбрасывая позицию на "конец колонки" — из-за этого сортировка внутри одной
-// колонки постоянно сбивалась. Теперь просто меряем позиции карточек напрямую.
-function onColDragOver(e, col) {
-  if (!draggingCard.value || sortBy.value !== 'manual' || hasActiveFilters.value) return
-  const container = e.currentTarget.querySelector('.col-cards')
-  const containerRect = container.getBoundingClientRect()
-  const cardEls = [...container.querySelectorAll('.kanban-card:not(.dragging)')]
-  let index = cardEls.length
-  let y = null
-  for (let i = 0; i < cardEls.length; i++) {
-    const rect = cardEls[i].getBoundingClientRect()
-    if (e.clientY < rect.top + rect.height / 2) {
-      index = i
-      // + container.scrollTop: getBoundingClientRect() даёт координаты относительно
-      // окна, а .drop-line — абсолютно спозиционированный ребёнок скроллящегося
-      // .col-cards, поэтому его top должен быть в системе координат прокрученного
-      // контента, а не видимой области. Без этого линия "уезжала" при скролле колонки.
-      y = rect.top - containerRect.top + container.scrollTop - 4
-      break
-    }
-  }
-  if (y === null) {
-    y = cardEls.length
-      ? cardEls[cardEls.length - 1].getBoundingClientRect().bottom - containerRect.top + container.scrollTop + 4
-      : 8
-  }
-  dragOverInfo.colId = col.id
-  dragOverInfo.index = index
-  dragOverInfo.y = y
-}
-async function onDrop(e, colId) {
-  if (!draggingCard.value) return
-  const card = draggingCard.value
-  const targetColId = dragOverInfo.colId ?? colId
-  let insertIndex = dragOverInfo.index ?? 0
+// Синхронная часть (до первого await) сразу меняет board — composable рассчитывает
+// на это, чтобы карточка встала ровно на место слота без лишней анимации.
+async function moveCard(card, targetColKey, insertIndex) {
   const workspaceId = activeWorkspaceId.value
   const snapshot = board.value.map(col => ({ ...col, cards: col.cards.map(item => ({ ...item })) }))
-  draggingCard.value = null
-  dragOverInfo.colId = null
-  dragOverInfo.index = null
 
-  // Индекс уже посчитан по карточкам БЕЗ учёта перетаскиваемой (см. onColDragOver),
-  // поэтому просто убираем её из старого места и вставляем в новое — без дополнительной
-  // подгонки индекса.
+  // Индекс посчитан по карточкам БЕЗ учёта перетаскиваемой, поэтому просто
+  // убираем её из старого места и вставляем в новое.
   const sourceCol = board.value.find(c => c.cards.some(cc => cc.id === card.id))
   const sourceIndex = sourceCol?.cards.findIndex(cc => cc.id === card.id) ?? -1
   const fromTerminal = !!sourceCol?.is_terminal
-  const targetCol = board.value.find(c => c.id === targetColId)
+  const targetCol = board.value.find(c => String(c.id) === String(targetColKey))
   if (!sourceCol || !targetCol) return
+  const targetColId = targetCol.id
   if (sourceCol.id === targetCol.id && sourceIndex === insertIndex) return
   sourceCol.cards.splice(sourceIndex, 1)
   insertIndex = Math.max(0, Math.min(insertIndex, targetCol.cards.length))
-  let completed = false
-  if (targetCol) {
-    targetCol.cards.splice(insertIndex, 0, { ...card, column_id: targetColId })
-    completed = targetCol.is_terminal && !fromTerminal
-  }
+  targetCol.cards.splice(insertIndex, 0, { ...card, column_id: targetColId })
+  const completed = targetCol.is_terminal && !fromTerminal
 
   localReorderPending = true
   localReorderSuppressUntil = Date.now() + 1200
@@ -917,7 +876,6 @@ function isOverdue(card) {
 
 // ─── Socket realtime ──────────────────────────────────────
 let offKanban, offWs
-function resetDragHandle() { dragHandleGrabbed.value = false }
 onMounted(async () => {
   document.addEventListener('pointerdown', onFilterOutsidePointer)
   if (!store.user) { router.push('/'); return }
@@ -931,10 +889,6 @@ onMounted(async () => {
     openCreate(null)
     router.replace({ query: {} }) // подчищаем URL, чтобы обновление страницы не открывало модалку повторно
   }
-
-  // Клик по ручке без реального перетаскивания не порождает dragend —
-  // без этого следующий обычный клик по телу карточки ошибочно считался бы разрешённым
-  window.addEventListener('mouseup', resetDragHandle)
 
   const socket = store.getSocket()
   if (socket) {
@@ -955,7 +909,7 @@ onMounted(async () => {
 onUnmounted(() => {
   offKanban?.()
   offWs?.()
-  window.removeEventListener('mouseup', resetDragHandle)
+  kanbanDrag.destroy()
   document.removeEventListener('pointerdown', onFilterOutsidePointer)
   clearTimeout(undoTimer)
   if (doneAudioCloseTimer) clearTimeout(doneAudioCloseTimer)
@@ -1145,11 +1099,20 @@ onUnmounted(() => {
   border-radius: var(--radius-lg);
   display: flex; flex-direction: column;
   max-height: 100%;
-  transition: border-color .15s;
+  transition: border-color var(--dur) var(--ease-out), background-color var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out);
+  /* колонки появляются «лесенкой» при открытии доски / смене воркспейса */
+  animation: kColIn var(--dur-slow) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+.kanban-board.no-anim .kanban-col { animation: none; }
+@keyframes kColIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
 }
 .kanban-col.drag-over {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  background: color-mix(in srgb, var(--accent-soft) 60%, var(--surface));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .col-header {
   display: flex; align-items: center; gap: 8px;
@@ -1167,9 +1130,16 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 .col-count {
+  display: inline-block;
   font-size: 11px; font-weight: 600;
   background: var(--surface-3); color: var(--text-muted);
   padding: 1px 7px; border-radius: 20px;
+}
+.bump-enter-active { animation: kCountBump .34s var(--ease-spring); }
+@keyframes kCountBump {
+  0%   { transform: scale(.7); opacity: .4; background: var(--accent-soft); color: var(--accent); }
+  60%  { transform: scale(1.12); opacity: 1; background: var(--accent-soft); color: var(--accent); }
+  100% { transform: scale(1); }
 }
 .col-add-btn {
   width: 24px; height: 24px; border-radius: var(--radius-md);
@@ -1193,15 +1163,44 @@ onUnmounted(() => {
   border-radius: var(--radius-md);
   padding: 10px 30px 10px 12px;
   cursor: pointer;
-  transition: box-shadow .18s ease, border-color .18s ease;
+  transition: box-shadow .18s ease, border-color .18s ease, translate .18s var(--ease-out);
   user-select: none;
+  -webkit-user-drag: none;
 }
 .kanban-card:hover {
   box-shadow: var(--shadow-md);
   border-color: var(--accent-line);
+  translate: 0 -1px; /* отдельное свойство translate — не конфликтует с transform от FLIP */
 }
 .kanban-card:active { opacity: .92; }
-.kanban-card.dragging { opacity: .4; transform: scale(.97); transition: none; }
+
+/* Слот на месте будущей вставки */
+.card-placeholder {
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  border: 1.5px dashed var(--accent-line);
+  background: color-mix(in srgb, var(--accent-soft) 55%, transparent);
+  transition: height var(--dur) var(--ease-out);
+}
+.card-placeholder.k-card-enter-from { opacity: 0; transform: scaleY(.6); }
+
+/* «Призрак», который едет за курсором (лежит в body, position: fixed) */
+.kanban-card.drag-ghost {
+  position: fixed;
+  top: 0; left: 0;
+  margin: 0;
+  z-index: 10000;
+  pointer-events: none;
+  cursor: grabbing;
+  transition: none;
+  translate: none;
+  will-change: transform;
+  transform-origin: 50% 40%;
+  border-color: var(--accent-line);
+  box-shadow: 0 18px 40px -12px rgba(0,0,0,.35), 0 4px 12px -4px rgba(0,0,0,.2);
+}
+.kanban-card.drag-ghost .card-drag-handle { opacity: 1; color: var(--accent); }
+.kanban-card.drag-ghost.drag-ghost-landed { box-shadow: var(--shadow-md); }
 
 .card-drag-handle {
   position: absolute; top: 8px; right: 8px;
@@ -1213,7 +1212,8 @@ onUnmounted(() => {
 .card-drag-handle:hover { color: var(--accent); }
 .card-drag-handle:active { cursor: grabbing; }
 @media (hover: none) {
-  .card-drag-handle { opacity: 1; pointer-events: auto; } /* тач-устройства: hover ненадёжен, держим ручку видимой всегда */
+  .card-drag-handle { opacity: 1; pointer-events: auto; touch-action: none; width: 28px; height: 28px; top: 4px; right: 4px; } /* тач-устройства: hover ненадёжен, держим ручку видимой всегда */
+  .kanban-card:hover { translate: none; }
 }
 
 .card-top-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 6px; }
@@ -1251,7 +1251,7 @@ onUnmounted(() => {
 
 .col-cards-list { display: flex; flex-direction: column; gap: 8px; position: relative; }
 .k-card-move {
-  transition: transform .36s cubic-bezier(.2,.75,.25,1);
+  transition: transform .3s var(--ease-out);
   will-change: transform;
 }
 .k-card-enter-active,
@@ -1338,15 +1338,6 @@ onUnmounted(() => {
 }
 .assignee-name { font-size: 11px; color: var(--text-muted); }
 .card-assignee-empty { font-size: 11px; color: var(--text-faint); }
-
-.drop-line {
-  position: absolute; left: 10px; right: 10px;
-  height: 3px; border-radius: 2px;
-  background: var(--accent);
-  pointer-events: none;
-  z-index: 5;
-  transition: top .08s ease;
-}
 
 .col-empty-drop {
   margin: 4px 2px;
