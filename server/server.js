@@ -694,6 +694,12 @@ app.patch('/api/users/:id', (req, res) => {
     return res.status(403).json({ error: 'Можно редактировать только свой профиль' })
   }
   const { name, avatar, color, description, banner } = req.body
+  const b = req.body || {}
+  const clip = (v, n) => (v == null ? null : (String(v).trim().slice(0, n) || null))
+  const validTz = (tz) => {
+    if (!tz) return null
+    try { new Intl.DateTimeFormat('en-US', { timeZone: String(tz) }); return String(tz) } catch { return null }
+  }
   try {
     db.db.prepare(`
       UPDATE users SET
@@ -706,10 +712,33 @@ app.patch('/api/users/:id', (req, res) => {
     `).run(name || null, avatar || null, color || null,
       description !== undefined ? description : null,
       banner || null, req.params.id)
-    res.json(db.getUserById(req.params.id))
+
+    // Поля, которые можно и очистить — трогаем, только если они пришли в запросе
+    const sets = [], vals = []
+    if ('title' in b)    { sets.push('title = ?');    vals.push(clip(b.title, 40)) }
+    if ('timezone' in b) { sets.push('timezone = ?'); vals.push(validTz(b.timezone)) }
+    if ('status_text' in b || 'status_emoji' in b) {
+      const text  = clip(b.status_text, 80)
+      const emoji = clip(b.status_emoji, 16)
+      const until = Number(b.status_until) > 0 ? Math.floor(Number(b.status_until)) : null
+      sets.push('status_emoji = ?', 'status_text = ?', 'status_until = ?')
+      vals.push(emoji, text, (text || emoji) ? until : null)
+    }
+    if (sets.length) db.db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...vals, req.params.id)
+
+    const updated = db.getUserById(req.params.id)
+    // Остальные клиенты обновят имя/аватар/статус без перезагрузки
+    io.emit('user:updated', updated)
+    res.json(updated)
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
+})
+
+app.get('/api/users/:id/stats', (req, res) => {
+  const id = Number(req.params.id)
+  if (!id) return res.status(400).json({ error: 'Некорректный id' })
+  res.json(db.getUserStats(id))
 })
 
 app.get('/api/users/:id', (req, res) => {

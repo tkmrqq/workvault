@@ -1,5 +1,5 @@
 <template>
-  <div class="msg-wrap" :data-msg-id="msg.id" :class="{ own: isOwn, 'msg-enter': uiPreferences.animationsEnabled && store.isMessageEntering(msg.id), flash: store.flashMsgId === msg.id, 'thread-open': !inThread && store.threadParentId === msg.id, 'mentions-me': mentionsMe }">
+  <div class="msg-wrap" @contextmenu="onContextMenu" :data-msg-id="msg.id" :class="{ own: isOwn, 'msg-enter': uiPreferences.animationsEnabled && store.isMessageEntering(msg.id), flash: store.flashMsgId === msg.id, 'thread-open': !inThread && store.threadParentId === msg.id, 'mentions-me': mentionsMe }">
     <div class="msg-avatar"
       :style="{ background: msg.user_color + '22', color: msg.user_color }"
       @click="openProfile(msg.user_id)"
@@ -11,6 +11,7 @@
     <div class="msg-body">
       <div class="msg-meta">
         <span class="msg-name" :style="{ color: msg.user_color }">{{ msg.user_name }}</span>
+        <span v-if="authorStatus" class="msg-status" :title="authorStatus.text || 'Статус'">{{ authorStatus.emoji || '💬' }}</span>
         <span class="msg-time">{{ formatTime(msg.created_at) }}</span>
         <span v-if="msg.edited" class="msg-edited">(ред.)</span>
       </div>
@@ -145,9 +146,10 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { getApiBase } from '@/lib/apiBase'
 import { uiPreferences } from '@/composables/useUiPreferences'
+import { openContextMenu, shouldUseNativeMenu, copyText } from '@/composables/useContextMenu'
 import ProfileModal from './ProfileModal.vue'
 import {
-  Download, SmilePlus, Pencil, Trash2, ListPlus, ListChecks, Check, MessagesSquare, ChevronRight,
+  Download, SmilePlus, Pencil, Trash2, ListPlus, ListChecks, Check, MessagesSquare, ChevronRight, Copy, AtSign, User,
   FileArchive, FileText, FileSpreadsheet, Music, Film, Image as ImageIcon, File as FileIcon
 } from 'lucide-vue-next'
 
@@ -189,6 +191,10 @@ function resolveUrl(url) {
 
 const attachUrl = computed(() => resolveUrl(props.msg.attachment?.url))
 const isOwn     = computed(() => props.msg.user_id === store.user?.id)
+const authorStatus = computed(() => {
+  const u = store.usersById?.[props.msg.user_id]
+  return store.statusActive(u) ? { emoji: u.status_emoji, text: u.status_text || '' } : null
+})
 const mentionsMe = computed(() => !isOwn.value && store.mentionsMe(props.msg.text))
 
 const parsedLinkMeta = computed(() => {
@@ -339,6 +345,29 @@ function submitEdit() {
   editing.value = false
 }
 function pick(emoji) { store.toggleReaction(props.msg.id, emoji); showPicker.value = false }
+
+// ПКМ по сообщению: своё меню (и в браузере, и в Electron). Для ссылок, картинок,
+// выделенного текста и по Shift+ПКМ остаётся системное меню.
+function onContextMenu(e) {
+  if (editing.value || shouldUseNativeMenu(e)) return
+  e.preventDefault()
+  const m = props.msg
+  const own = isOwn.value
+  openContextMenu(e, [
+    { type: 'reactions', emojis: EMOJIS.slice(0, 6), action: em => store.toggleReaction(m.id, em) },
+    !props.inThread && { label: 'Ответить в треде', icon: MessagesSquare, action: () => store.openThread(m.id) },
+    m.task
+      ? { label: 'Открыть задачу', icon: ListChecks, action: openTask }
+      : { label: 'Создать задачу', icon: ListPlus, action: makeTask, disabled: creatingTask.value },
+    !own && { label: 'Упомянуть автора', icon: AtSign,
+      action: () => store.insertIntoComposer('@' + m.user_name + ' ', props.inThread ? (m.parent_id || m.id) : null) },
+    m.text && { label: 'Копировать текст', icon: Copy, action: () => copyText(m.text) },
+    { label: 'Профиль автора', icon: User, action: () => openProfile(m.user_id) },
+    own && { type: 'separator' },
+    own && { label: 'Редактировать', icon: Pencil, action: startEdit },
+    own && { label: 'Удалить', icon: Trash2, danger: true, action: () => store.deleteMessage(m.id) },
+  ])
+}
 </script>
 
 <style scoped>
@@ -467,6 +496,7 @@ function pick(emoji) { store.toggleReaction(props.msg.id, emoji); showPicker.val
 .msg-name { font-size: var(--text-sm); font-weight: 700; }
 .msg-time { font-size: var(--text-xs); color: var(--text-faint); }
 .msg-edited { font-size: 10px; color: var(--text-faint); }
+.msg-status { font-size: 13px; line-height: 1; cursor: default; }
 
 .msg-text { font-size: var(--text-sm); line-height: 1.6; color: var(--text); word-break: break-word; }
 .msg-text :deep(code) {

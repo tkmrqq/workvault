@@ -180,6 +180,10 @@ try { db.prepare('CREATE INDEX IF NOT EXISTS idx_kanban_cards_source_msg ON kanb
 // Колонка messages.crm_done — легаси от «Занести в CRM». В новых БД её больше
 // не создаём, в старых просто не используем (DROP COLUMN в SQLite не стоит риска).
 try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN source_snapshot TEXT').run() } catch { }
+// Профиль: должность, часовой пояс и статус (со временем автосброса)
+for (const col of ['title TEXT', 'timezone TEXT', 'status_emoji TEXT', 'status_text TEXT', 'status_until INTEGER']) {
+  try { db.prepare(`ALTER TABLE users ADD COLUMN ${col}`).run() } catch { }
+}
 
 // Треды: ответ — обычное сообщение с parent_id. Треды плоские (как в Slack):
 // у ответа не бывает своих ответов. Удалили корень — удаляется и тред.
@@ -206,6 +210,11 @@ function publicUserSelect(where = '') {
       created_at,
       description,
       banner,
+      title,
+      timezone,
+      CASE WHEN status_until IS NULL OR status_until > unixepoch() THEN status_emoji END AS status_emoji,
+      CASE WHEN status_until IS NULL OR status_until > unixepoch() THEN status_text  END AS status_text,
+      CASE WHEN status_until IS NULL OR status_until > unixepoch() THEN status_until END AS status_until,
       role,
       CASE WHEN password_hash IS NOT NULL AND password_hash != '' THEN 1 ELSE 0 END as has_password
     FROM users
@@ -414,7 +423,18 @@ function setCardSourceSnapshot(cardId, snap) {
   db.prepare('UPDATE kanban_cards SET source_snapshot=? WHERE id=?').run(snap ? JSON.stringify(snap) : null, cardId)
 }
 
+function getUserStats(id) {
+  return db.prepare(`
+    SELECT
+      (SELECT COUNT(*)        FROM messages     WHERE user_id = @id)                          AS messages,
+      (SELECT MAX(created_at) FROM messages     WHERE user_id = @id)                          AS last_message_at,
+      (SELECT COUNT(*)        FROM kanban_cards WHERE assignee_id = @id AND done_at IS NULL)     AS tasks_open,
+      (SELECT COUNT(*)        FROM kanban_cards WHERE assignee_id = @id AND done_at IS NOT NULL) AS tasks_done
+  `).get({ id })
+}
+
 module.exports = {
+  getUserStats,
   taskForMessage,
   messageSnapshot,
   setCardSourceSnapshot,

@@ -46,6 +46,25 @@ export const useAppStore = defineStore('app', () => {
 
   // ── Пользователи и @упоминания ──
   const users = ref([])
+  const usersById = computed(() => {
+    const m = {}
+    for (const u of users.value) m[u.id] = u
+    return m
+  })
+  function statusActive(u) {
+    if (!u || !(u.status_text || u.status_emoji)) return false
+    return !u.status_until || u.status_until * 1000 > Date.now()
+  }
+  const myStatusLine = computed(() => statusActive(user.value)
+    ? [user.value.status_emoji, user.value.status_text].filter(Boolean).join(' ')
+    : '')
+
+  // Вставка текста в поле ввода извне (контекстное меню, профиль).
+  // parentId: null — основное поле канала, id — поле в панели треда.
+  const composerInsert = ref(null)
+  function insertIntoComposer(text, parentId = null) {
+    composerInsert.value = { text, parentId, nonce: Date.now() + Math.random() }
+  }
   async function loadUsers(force = false) {
     if (users.value.length && !force) return users.value
     try { users.value = await fetchUsers() } catch { }
@@ -282,6 +301,20 @@ export const useAppStore = defineStore('app', () => {
       _patchMessage(messageId, m => ({ ...m, task: task || null }))
     })
 
+    socket.on('user:updated', u => {
+      if (!u?.id) return
+      users.value = users.value.some(x => x.id === u.id)
+        ? users.value.map(x => x.id === u.id ? { ...x, ...u } : x)
+        : [...users.value, u]
+      if (user.value?.id === u.id) user.value = { ...user.value, ...u }
+      const patch = m => m.user_id === u.id ? { ...m, user_name: u.name, user_avatar: u.avatar, user_color: u.color } : m
+      for (const chId of Object.keys(messages.value)) {
+        if (messages.value[chId].some(m => m.user_id === u.id)) messages.value[chId] = messages.value[chId].map(patch)
+      }
+      if (threadReplies.value?.some?.(m => m.user_id === u.id)) threadReplies.value = threadReplies.value.map(patch)
+      if (threadParent.value?.user_id === u.id) threadParent.value = patch(threadParent.value)
+    })
+
     socket.on('typing:update', ({ userName, typing }) => {
       if (!activeChId.value) return
       if (!typingMap.value[activeChId.value]) typingMap.value[activeChId.value] = {}
@@ -515,6 +548,7 @@ export const useAppStore = defineStore('app', () => {
 
   return {
     users, loadUsers, mentionRegex, myMentionName, mentionsMe,
+    usersById, statusActive, myStatusLine, composerInsert, insertIntoComposer,
     user, sessionChecked, theme, folders, activeChId, activeChannel, allChannels,
     activeMessages, filteredActiveMessages, activeAttachmentFilter, setAttachmentFilter,
     hasMore, onlineList, typingNames,

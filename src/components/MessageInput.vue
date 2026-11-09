@@ -170,6 +170,18 @@ const mentionMatches = computed(() => {
 const mentionOpen = computed(() => !mentionDismissed.value && !slashOpen.value && mentionMatches.value.length > 0)
 watch(mentionQuery, () => { mentionIndex.value = 0; mentionDismissed.value = false })
 function isOnline(id) { return store.onlineList.some(o => o.userId === id) }
+// Вставка из контекстного меню / профиля («Упомянуть»)
+watch(() => store.composerInsert, ci => {
+  if (!ci || (ci.parentId ?? null) !== (props.parentId ?? null)) return
+  const ta = taRef.value
+  const pos = ta && document.activeElement === ta ? ta.selectionStart : text.value.length
+  const before = text.value.slice(0, pos), after = text.value.slice(pos)
+  const sep = before.length && before[before.length - 1].trim() !== '' ? ' ' : ''
+  text.value = before + sep + ci.text + after
+  const np = (before + sep + ci.text).length
+  nextTick(() => { ta?.focus(); ta?.setSelectionRange(np, np); caret.value = np })
+})
+
 function applyMention(u) {
   if (!u) return
   const pos = caret.value
