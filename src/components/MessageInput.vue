@@ -50,6 +50,24 @@
       </div>
     </Transition>
 
+    <!-- @упоминания -->
+    <Transition name="slash-pop">
+      <div v-if="mentionOpen" class="slash-menu mention-menu" role="listbox">
+        <div class="slash-head">Упомянуть</div>
+        <button v-for="(u, i) in mentionMatches" :key="u.id" type="button"
+          class="slash-item" :class="{ active: i === mentionIndex }" role="option"
+          @mousedown.prevent="applyMention(u)" @mouseenter="mentionIndex = i"
+        >
+          <span class="mm-avatar" :style="{ background: (u.color || '#8a8f98') + '22', color: u.color || '#8a8f98' }">
+            {{ u.avatar }}
+            <span v-if="isOnline(u.id)" class="mm-online" />
+          </span>
+          <span class="slash-name">{{ u.name }}</span>
+        </button>
+        <div class="slash-foot">↑↓ выбрать · Enter/Tab — подставить · Esc — закрыть</div>
+      </div>
+    </Transition>
+
     <!-- Input row -->
     <div class="input-row">
       <label class="attach-btn" title="Прикрепить файл">
@@ -69,7 +87,9 @@
         :disabled="!store.activeChId"
         rows="1"
         @keydown="onKeydown"
-        @input="onInput"
+        @input="(e) => { onInput(e); syncCaret() }"
+        @click="syncCaret"
+        @keyup="syncCaret"
         @paste="onPaste"
       />
       <button class="send-btn" :disabled="!canSend" @click="send">
@@ -78,7 +98,7 @@
     </div>
 
     <div class="input-hint">
-      Enter — отправить · Shift+Enter — новая строка · Ctrl+V — вставить картинку · / — команды
+      Enter — отправить · Shift+Enter — новая строка · Ctrl+V — вставить картинку · / — команды · @ — упомянуть
     </div>
   </div>
 </template>
@@ -129,6 +149,40 @@ const slashMatches = computed(() =>
 )
 const slashOpen = computed(() => !slashDismissed.value && slashMatches.value.length > 0)
 watch(slashQuery, () => { slashIndex.value = 0; slashDismissed.value = false })
+
+// ─── @упоминания ─────────────────────────────────────────────
+const caret = ref(0)
+function syncCaret() { caret.value = taRef.value?.selectionStart ?? text.value.length }
+const mentionQuery = computed(() => {
+  const m = text.value.slice(0, caret.value).match(/(^|\s)@([\p{L}\p{N}_.-]{0,30})$/u)
+  return m ? m[2].toLowerCase() : null
+})
+const mentionIndex     = ref(0)
+const mentionDismissed = ref(false)
+const mentionMatches = computed(() => {
+  const q = mentionQuery.value
+  if (q === null) return []
+  return store.users
+    .filter(u => u.id !== store.user?.id && u.name?.toLowerCase().includes(q))
+    .sort((a, b) => a.name.toLowerCase().indexOf(q) - b.name.toLowerCase().indexOf(q))
+    .slice(0, 6)
+})
+const mentionOpen = computed(() => !mentionDismissed.value && !slashOpen.value && mentionMatches.value.length > 0)
+watch(mentionQuery, () => { mentionIndex.value = 0; mentionDismissed.value = false })
+function isOnline(id) { return store.onlineList.some(o => o.userId === id) }
+function applyMention(u) {
+  if (!u) return
+  const pos = caret.value
+  const before = text.value.slice(0, pos).replace(/@[\p{L}\p{N}_.-]*$/u, '@' + u.name + ' ')
+  text.value = before + text.value.slice(pos)
+  nextTick(() => {
+    const ta = taRef.value
+    if (!ta) return
+    ta.focus()
+    ta.setSelectionRange(before.length, before.length)
+    caret.value = before.length
+  })
+}
 
 // Команда уже введена целиком: "/task Купить домен"
 const commandMatch = computed(() => {
@@ -276,6 +330,17 @@ function clearFile() {
 }
 
 function onKeydown(e) {
+  if (mentionOpen.value) {
+    const n = mentionMatches.value.length
+    if (e.key === 'ArrowDown') { e.preventDefault(); mentionIndex.value = (mentionIndex.value + 1) % n; return }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); mentionIndex.value = (mentionIndex.value - 1 + n) % n; return }
+    if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+      e.preventDefault()
+      applyMention(mentionMatches.value[mentionIndex.value])
+      return
+    }
+    if (e.key === 'Escape') { e.preventDefault(); mentionDismissed.value = true; return }
+  }
   if (slashOpen.value) {
     const n = slashMatches.value.length
     if (e.key === 'ArrowDown') { e.preventDefault(); slashIndex.value = (slashIndex.value + 1) % n; return }
@@ -441,6 +506,16 @@ async function runCommandAfterSend(cmd, ack, msgText) {
 .input-hint { padding: var(--space-1) var(--space-2) 0; font-size: 10px; color: var(--text-faint); }
 
 /* ── Slash-меню ── */
+.mm-avatar {
+  position: relative; width: 24px; height: 24px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  font-size: 12px;
+}
+.mm-online {
+  position: absolute; right: -1px; bottom: -1px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--success, #22c55e); box-shadow: 0 0 0 2px var(--surface);
+}
+.mention-menu .slash-item { grid-template-columns: auto 1fr; }
 .slash-menu {
   position: absolute; z-index: 30;
   left: var(--space-5); right: var(--space-5); bottom: calc(100% - 2px);

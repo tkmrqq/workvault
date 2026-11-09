@@ -64,27 +64,37 @@
             <!-- View mode -->
             <template v-if="!editMode">
               <h1 class="card-page-title">{{ card.title }}</h1>
+
+              <!-- Задача из чата -->
+              <section v-if="sourceView" class="chat-origin" :class="{ deleted: sourceView.deleted }">
+                <header class="co-head">
+                  <span class="co-badge"><MessageSquare :size="12" :stroke-width="2.4" /> Из чата</span>
+                  <span class="co-channel">{{ sourceView.channelIcon }} #{{ sourceView.channelName }}</span>
+                  <span v-if="sourceView.inThread" class="co-tag">в треде</span>
+                  <span v-else-if="sourceView.replies" class="co-tag">ответов в треде: {{ sourceView.replies }}</span>
+                  <span v-if="sourceView.date" class="co-date">{{ sourceView.date }}</span>
+                </header>
+                <div class="co-msg">
+                  <span class="co-avatar" :style="{ background: sourceView.color + '22', color: sourceView.color }">{{ sourceView.avatar }}</span>
+                  <div class="co-body">
+                    <div class="co-author" :style="{ color: sourceView.color }">{{ sourceView.author }}</div>
+                    <div v-if="sourceView.text" class="co-text" :class="{ clamped: sourceLong && !sourceExpanded }">{{ sourceView.text }}</div>
+                    <button v-if="sourceLong" type="button" class="co-more" @click="sourceExpanded = !sourceExpanded">{{ sourceExpanded ? 'Свернуть' : 'Показать полностью' }}</button>
+                    <div v-if="sourceView.attachment" class="co-file">��� {{ sourceView.attachment }}</div>
+                  </div>
+                </div>
+                <footer class="co-foot">
+                  <span v-if="sourceView.deleted" class="co-note">Сообщение удалено из чата — это сохранённая копия</span>
+                  <button v-else type="button" class="co-open" @click="goToSourceMessage">
+                    {{ sourceView.inThread ? 'Открыть тред' : 'Открыть в чате' }}
+                    <ArrowRightIcon :size="14" :stroke-width="2.2" />
+                  </button>
+                </footer>
+              </section>
               <div v-if="card.description" class="card-page-desc markdown-body compact-mobile" v-html="renderMarkdown(card.description)"></div>
               <button v-if="card.description" type="button" class="desc-expand-hint mobile-only" @click="descFullscreen = true">Читать целиком</button>
               <p v-else class="card-page-desc empty">Нет описания</p>
 
-              <!-- Исходное сообщение в чате -->
-              <button v-if="card.source_message" type="button" class="source-msg" @click="goToSourceMessage">
-                <span class="sm-avatar" :style="{ background: card.source_message.user_color + '22', color: card.source_message.user_color }">
-                  {{ card.source_message.user_avatar }}
-                </span>
-                <span class="sm-body">
-                  <span class="sm-head">
-                    <MessageSquare :size="12" :stroke-width="2.2" />
-                    Из сообщения в #{{ card.source_message.channel_name || 'канал' }} · {{ card.source_message.user_name }}
-                  </span>
-                  <span class="sm-text">{{ sourceSnippet }}</span>
-                </span>
-                <ArrowRightIcon class="sm-go" :size="15" :stroke-width="2.2" />
-              </button>
-              <div v-else-if="card.source_channel_id" class="source-msg missing">
-                <MessageSquare :size="12" :stroke-width="2.2" /> Исходное сообщение удалено
-              </div>
             </template>
 
             <!-- Edit mode -->
@@ -439,13 +449,35 @@ const router = useRouter()
 const API    = getApiBase()
 
 // ─── Связь с сообщением чата ─────────────────────────────
-const sourceSnippet = computed(() => {
-  const m = card.value?.source_message
-  if (!m) return ''
-  const t = (m.text || '').replace(/\s+/g, ' ').trim()
-  if (t) return t.length > 160 ? t.slice(0, 157) + '…' : t
-  return m.attachment?.name ? `📎 ${m.attachment.name}` : 'Сообщение без текста'
+const sourceExpanded = ref(false)
+const sourceView = computed(() => {
+  const c = card.value
+  if (!c || (!c.source_message && !c.source_snapshot && !c.source_channel_id)) return null
+  const m = c.source_message
+  const s = m || c.source_snapshot || {}
+  return {
+    deleted:     !m,
+    channelName: s.channel_name || 'канал',
+    channelIcon: s.channel_icon || '',
+    inThread:    !!s.parent_id,
+    replies:     m?.reply_count || 0,
+    author:      s.user_name || (m ? 'Без имени' : 'Сообщение удалено'),
+    avatar:      s.user_avatar || '💬',
+    color:       s.user_color || '#8a8f98',
+    text:        (s.text || '').trim(),
+    attachment:  m?.attachment?.name || c.source_snapshot?.attachment_name || '',
+    date:        s.created_at ? formatSourceDate(s.created_at) : '',
+  }
 })
+const sourceLong = computed(() => {
+  const t = sourceView.value?.text || ''
+  return t.length > 360 || t.split('\n').length > 6
+})
+function formatSourceDate(ts) {
+  const d = typeof ts === 'number' ? new Date(ts > 1e12 ? ts : ts * 1000) : new Date(String(ts).replace(' ', 'T'))
+  if (isNaN(d)) return ''
+  return d.toLocaleString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+}
 function goToSourceMessage() {
   const m = card.value?.source_message
   if (!m) return
@@ -1400,4 +1432,64 @@ onUnmounted(() => {
   .modal-footer { flex-direction: column; align-items: stretch; gap: 10px; }
   .modal-footer-right { justify-content: flex-end; }
 }
+
+/* ── Задача из чата ── */
+.chat-origin {
+  position: relative; margin: 14px 0 18px;
+  border: 1px solid var(--border); border-radius: var(--radius-lg, 12px);
+  background: linear-gradient(180deg, var(--accent-soft) 0%, transparent 75%), var(--surface);
+  overflow: hidden;
+  animation: coIn .35s var(--ease-out, ease) both;
+}
+.chat-origin::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--accent);
+}
+.chat-origin.deleted { background: var(--surface); }
+.chat-origin.deleted::before { background: var(--text-faint); }
+.co-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 14px 0 16px;
+  font-size: var(--text-xs, .75rem); color: var(--text-muted);
+}
+.co-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px;
+  background: var(--accent); color: #fff; font-weight: 700;
+}
+.chat-origin.deleted .co-badge { background: var(--surface-3, var(--border)); color: var(--text-muted); }
+.co-channel { font-weight: 600; color: var(--text); }
+.co-tag { padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); }
+.co-date { margin-left: auto; color: var(--text-faint); }
+.co-msg { display: flex; gap: 10px; padding: 12px 14px 4px 16px; }
+.co-avatar {
+  width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: .95rem;
+}
+.co-body { min-width: 0; flex: 1; }
+.co-author { font-weight: 700; font-size: var(--text-sm, .85rem); margin-bottom: 2px; }
+.co-text { white-space: pre-wrap; word-break: break-word; line-height: 1.5; color: var(--text); }
+.co-text.clamped {
+  display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, #000 65%, transparent);
+  mask-image: linear-gradient(180deg, #000 65%, transparent);
+}
+.chat-origin.deleted .co-text { color: var(--text-muted); }
+.co-more { margin-top: 4px; font-size: var(--text-xs, .75rem); font-weight: 600; color: var(--accent); }
+.co-file {
+  margin-top: 6px; display: inline-flex; gap: 6px; align-items: center;
+  padding: 4px 8px; border-radius: var(--radius-md, 8px);
+  background: var(--surface-2, var(--bg)); font-size: var(--text-xs, .75rem); color: var(--text-muted);
+}
+.co-foot { display: flex; justify-content: flex-end; padding: 6px 10px 10px 16px; }
+.co-open {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: var(--radius-md, 8px);
+  font-size: var(--text-sm, .85rem); font-weight: 600; color: var(--accent);
+  transition: background .15s ease, gap .2s var(--ease-out, ease);
+}
+.co-open:hover { background: var(--accent-soft); gap: 10px; }
+.co-note { margin-right: auto; font-size: var(--text-xs, .75rem); color: var(--text-faint); font-style: italic; }
+@keyframes coIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .chat-origin { animation: none; } }
 </style>

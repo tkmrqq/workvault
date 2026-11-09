@@ -1,5 +1,5 @@
 <template>
-  <div class="msg-wrap" :data-msg-id="msg.id" :class="{ own: isOwn, 'msg-enter': uiPreferences.animationsEnabled && store.isMessageEntering(msg.id), flash: store.flashMsgId === msg.id, 'thread-open': !inThread && store.threadParentId === msg.id }">
+  <div class="msg-wrap" :data-msg-id="msg.id" :class="{ own: isOwn, 'msg-enter': uiPreferences.animationsEnabled && store.isMessageEntering(msg.id), flash: store.flashMsgId === msg.id, 'thread-open': !inThread && store.threadParentId === msg.id, 'mentions-me': mentionsMe }">
     <div class="msg-avatar"
       :style="{ background: msg.user_color + '22', color: msg.user_color }"
       @click="openProfile(msg.user_id)"
@@ -189,6 +189,7 @@ function resolveUrl(url) {
 
 const attachUrl = computed(() => resolveUrl(props.msg.attachment?.url))
 const isOwn     = computed(() => props.msg.user_id === store.user?.id)
+const mentionsMe = computed(() => !isOwn.value && store.mentionsMe(props.msg.text))
 
 const parsedLinkMeta = computed(() => {
   const m = props.msg.link_meta
@@ -268,6 +269,16 @@ function formatSize(bytes) {
 
 function renderText(text) {
   if (!text) return ''
+  return highlightMentions(baseRender(text))
+}
+// @упоминания подсвечиваем уже в готовом (экранированном) HTML
+function highlightMentions(html) {
+  const re = store.mentionRegex
+  if (!re) return html
+  return html.replace(re, (_, pre, name) =>
+    `${pre}<span class="mention${name === store.myMentionName ? ' me' : ''}">@${name}</span>`)
+}
+function baseRender(text) {
   return text
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
@@ -355,6 +366,21 @@ function pick(emoji) { store.toggleReaction(props.msg.id, emoji); showPicker.val
 
 /* Корень открытого сейчас треда */
 .msg-wrap.thread-open { background: var(--accent-soft); }
+
+/* ── Упоминания ── */
+.msg-wrap.mentions-me {
+  background: color-mix(in srgb, var(--warning, #f5a524) 8%, transparent);
+  box-shadow: inset 3px 0 0 var(--warning, #f5a524);
+}
+.msg-text :deep(.mention) {
+  padding: 0 4px; border-radius: 5px;
+  background: var(--accent-soft); color: var(--accent);
+  font-weight: 600; white-space: nowrap;
+}
+.msg-text :deep(.mention.me) {
+  background: color-mix(in srgb, var(--warning, #f5a524) 26%, transparent);
+  color: var(--text);
+}
 
 /* ── Сводка треда ── */
 .thread-summary {

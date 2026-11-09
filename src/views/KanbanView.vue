@@ -162,8 +162,9 @@
                       <span class="assignee-name">{{ card.assignee_name }}</span>
                     </div>
                     <div v-else class="card-assignee-empty">Не назначено</div>
-                    <span v-if="card.source_message_id" class="card-source" title="Создано из сообщения в чате">
-                      <MessageSquare :size="11" :stroke-width="2.2" />
+                    <span v-if="card.source_message_id" class="card-source" title="Задача из чата">
+                      <MessageSquare :size="11" :stroke-width="2.4" />
+                      <span v-if="sourceChannelName(card)" class="card-source-ch">{{ sourceChannelName(card) }}</span>
                     </span>
                   </div>
               </div>
@@ -366,6 +367,12 @@ import {
 } from 'lucide-vue-next'
 
 const store  = useAppStore()
+// Название канала для чипа «из чата» на карточке
+if (!store.folders.length) Promise.resolve(store.fetchFolders?.()).catch(() => {})
+function sourceChannelName(card) {
+  const ch = store.allChannels.find(c => c.id === card.source_channel_id)
+  return ch ? '#' + ch.name : ''
+}
 const router = useRouter()
 const route  = useRoute()
 const API    = getApiBase()
@@ -1334,7 +1341,13 @@ onUnmounted(() => {
 .card-progress-label { font-size: 10px; font-weight: 700; color: var(--text-faint); }
 
 .card-footer { margin-top: 8px; display: flex; align-items: center; gap: 6px; }
-.card-source { margin-left: auto; display: inline-flex; color: var(--text-faint); }
+.card-source {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 3px;
+  max-width: 120px; padding: 1px 7px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 10.5px; font-weight: 600;
+}
+.card-source-ch { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-assignee {
   display: flex; align-items: center; gap: 6px;
 }

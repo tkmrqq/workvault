@@ -24,13 +24,13 @@
       <p>Выбери канал из левой панели</p>
     </div>
 
-    <template v-for="(group, date) in groupedByDate" :key="date">
+    <section v-for="(group, date) in groupedByDate" :key="date" class="day-group">
       <div class="date-sep"><span>{{ date }}</span></div>
-      <MessageItem
-        v-for="msg in group" :key="msg.id" :msg="msg"
-        @open-image="openLightbox"
-      />
-    </template>
+      <template v-for="msg in group" :key="msg.id">
+        <div v-if="msg.id === newDividerId" class="new-divider"><span>Новые сообщения</span></div>
+        <MessageItem :msg="msg" @open-image="openLightbox" />
+      </template>
+    </section>
 
     <div v-if="store.typingNames.length" class="typing-indicator">
       <span class="typing-dots"><span/><span/><span/></span>
@@ -54,7 +54,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useAppStore } from '@/stores/app'
 import MessageItem from './MessageItem.vue'
 import { ArrowUp, X, Search } from 'lucide-vue-next'
@@ -125,6 +125,66 @@ watch(() => store.activeChId, () => {
 })
 watch(() => store.typingNames.length, () => scrollToBottom())
 
+// Ширина ленты меняется (открыли/закрыли тред, ресайз окна) — текст
+// переносится, высота контента прыгает. Если были внизу — держим низ.
+let resizeObs = null
+onMounted(() => {
+  if (typeof ResizeObserver === 'undefined' || !listEl.value) return
+  resizeObs = new ResizeObserver(() => {
+    const el = listEl.value
+    if (el && atBottom.value) el.scrollTop = el.scrollHeight
+  })
+  resizeObs.observe(listEl.value)
+})
+onUnmounted(() => resizeObs?.disconnect())
+
+// ─── «Новые сообщения» ───────────────────────────────────
+// Последнее прочитанное сообщение по каналам храним локально. При входе в
+// канал ставим разделитель перед первым чужим непрочитанным и держим его,
+// пока не уйдёшь из канала (как в Slack).
+const LAST_READ_KEY = 'wv-last-read'
+const newDividerId = ref(null)
+let dividerFor = null
+function readLastRead() {
+  try { return JSON.parse(localStorage.getItem(LAST_READ_KEY) || '{}') || {} } catch { return {} }
+}
+function markRead() {
+  const ch = store.activeChId
+  const list = store.activeMessages
+  if (!ch || !list.length || document.hidden) return
+  const lastId = list[list.length - 1].id
+  const map = readLastRead()
+  if ((map[ch] || 0) >= lastId) return
+  map[ch] = lastId
+  try { localStorage.setItem(LAST_READ_KEY, JSON.stringify(map)) } catch { }
+}
+function scrollToDivider() {
+  nextTick(() => {
+    const list = listEl.value
+    const el = list?.querySelector('.new-divider')
+    if (!list || !el) return
+    const delta = el.getBoundingClientRect().top - list.getBoundingClientRect().top
+    list.scrollTop += delta - list.clientHeight / 3
+  })
+}
+watch(() => [store.activeChId, store.activeMessages.length], ([ch, len]) => {
+  if (ch !== dividerFor) {
+    newDividerId.value = null
+    if (ch && len) {
+      dividerFor = ch
+      const last = readLastRead()[ch]
+      const first = last ? store.activeMessages.find(m => m.id > last && m.user_id !== store.user?.id) : null
+      newDividerId.value = first?.id || null
+      if (first && !store.focusTarget) scrollToDivider()
+    }
+  }
+  if (atBottom.value) markRead()
+}, { immediate: true })
+watch(atBottom, v => { if (v) markRead() })
+function onVisibility() { if (!document.hidden && atBottom.value) markRead() }
+onMounted(() => document.addEventListener('visibilitychange', onVisibility))
+onUnmounted(() => document.removeEventListener('visibilitychange', onVisibility))
+
 // ─── Переход к конкретному сообщению (из карточки канбана) ───────
 // Если сообщение старое и ещё не подгружено — догружаем историю пачками.
 let focusBusy = false
@@ -190,12 +250,32 @@ watch(
 .load-btn:hover:not(:disabled) { background: var(--accent); color: white; }
 .load-btn:disabled { opacity: .5; cursor: not-allowed; }
 
+.day-group { position: relative; }
+/* ��ата «прилипает» к верху ленты, пока листаешь сообщения этого дня */
 .date-sep {
-  display: flex; align-items: center; gap: var(--space-3);
-  padding: var(--space-3) var(--space-5);
-  font-size: 11px; font-weight: 700; color: var(--text-faint);
+  position: sticky; top: 8px; z-index: 4;
+  display: flex; justify-content: center;
+  padding: var(--space-2) var(--space-5);
+  pointer-events: none;
 }
-.date-sep::before, .date-sep::after { content: ''; flex: 1; height: 1px; background: var(--divider); }
+.date-sep span {
+  padding: 3px 12px; border-radius: var(--radius-full, 999px);
+  font-size: 11px; font-weight: 700; color: var(--text-muted);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+.new-divider {
+  display: flex; align-items: center; gap: var(--space-3);
+  margin: var(--space-2) 0; padding: 0 var(--space-5);
+  color: var(--danger, #e5484d);
+  font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  animation: ndIn .45s var(--ease-out, ease) both;
+}
+.new-divider::before { content: ''; flex: 1; height: 1px; background: currentColor; opacity: .5; }
+@keyframes ndIn { from { opacity: 0; transform: scaleX(.96); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .new-divider { animation: none; } }
 
 .typing-indicator {
   display: flex; align-items: center; gap: var(--space-2);

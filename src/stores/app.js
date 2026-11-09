@@ -43,6 +43,34 @@ export const useAppStore = defineStore('app', () => {
   // Переход «к исходному сообщению» из карточки: MessageList ждёт, пока канал
   // загрузится, скроллит к сообщению и подсвечивает его (flashMsgId)
   const focusTarget = ref(null) // { channelId, messageId, replyId? }
+
+  // ── Пользователи и @упоминания ──
+  const users = ref([])
+  async function loadUsers(force = false) {
+    if (users.value.length && !force) return users.value
+    try { users.value = await fetchUsers() } catch { }
+    return users.value
+  }
+  const _escHtml = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const _escRe   = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  // Ищем @Имя в уже экранированном HTML; длинные имена первыми, чтобы
+  // «@Иван Петров» не подсветилось как «@Иван» + « Петров»
+  const mentionRegex = computed(() => {
+    const names = users.value.map(u => u.name).filter(Boolean)
+      .map(_escHtml).sort((a, b) => b.length - a.length).map(_escRe)
+    if (!names.length) return null
+    return new RegExp(String.raw`(^|[\s(>])@(` + names.join('|') + String.raw`)(?![\p{L}\p{N}_])`, 'gu')
+  })
+  const myMentionName = computed(() => user.value?.name ? _escHtml(user.value.name) : '')
+  function mentionsMe(text) {
+    const n = user.value?.name
+    if (!text || !n || !text.includes('@')) return false
+    return new RegExp(String.raw`(^|[\s(])@` + _escRe(n) + String.raw`(?![\p{L}\p{N}_])`, 'u').test(text)
+  }
+  function _notify(title, body) {
+    if (window.electronAPI) window.electronAPI.notify?.(title, body)
+    else if ('Notification' in window && Notification.permission === 'granted') new Notification(title, { body })
+  }
   // Открытый тред (правая панель в чате)
   const threadParentId = ref(null)
   const threadParent   = ref(null)
@@ -224,6 +252,9 @@ export const useAppStore = defineStore('app', () => {
     // Новый ответ в треде — показываем, только если этот тред сейчас открыт;
     // счётчик под корнем обновляется отдельным message:thread
     socket.on('thread:reply', msg => {
+      if (msg.user_id !== user.value?.id && mentionsMe(msg.text) && (document.hidden || msg.parent_id !== threadParentId.value)) {
+        _notify(`${msg.user_name} упоминает вас в треде`, msg.text || '')
+      }
       if (msg.parent_id !== threadParentId.value) return
       if (!threadReplies.value.find(m => m.id === msg.id)) {
         threadReplies.value = [...threadReplies.value, msg]
@@ -277,12 +308,12 @@ export const useAppStore = defineStore('app', () => {
       messages.value[chId].push(msg)
       if (chId === activeChId.value) markMessageEnter(msg.id)
     }
-    if (chId !== activeChId.value && user.value?.id !== msg.user_id) {
-      const body = msg.text || (msg.attachment ? '📎 файл' : '')
-      if (window.electronAPI) {
-        window.electronAPI.notify?.(msg.user_name, body)
-      } else if ('Notification' in window && Notification.permission === 'granted') {
-        new Notification(msg.user_name, { body })
+    if (user.value?.id !== msg.user_id) {
+      const mentioned = mentionsMe(msg.text)
+      // Чужой канал — как раньше; активный — только если упомянули, а окно свёрнуто
+      if (chId !== activeChId.value || (mentioned && document.hidden)) {
+        const body = msg.text || (msg.attachment ? '📎 файл' : '')
+        _notify(mentioned ? `${msg.user_name} упоминает вас` : msg.user_name, body)
       }
     }
   }
@@ -483,6 +514,7 @@ export const useAppStore = defineStore('app', () => {
   // sessionChecked), а не сразу здесь — иначе будет гонка с установкой роутов
 
   return {
+    users, loadUsers, mentionRegex, myMentionName, mentionsMe,
     user, sessionChecked, theme, folders, activeChId, activeChannel, allChannels,
     activeMessages, filteredActiveMessages, activeAttachmentFilter, setAttachmentFilter,
     hasMore, onlineList, typingNames,

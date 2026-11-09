@@ -292,18 +292,16 @@ app.post('/api/messages/:id/task', (req, res) => {
     if (!column) return res.status(400).json({ error: 'На канбане нет колонок' })
 
     const cardTitle = (title && String(title).trim()) ? String(title).trim().slice(0, 200) : taskTitleFromMessage(msg)
-    // Цитата исходного текста в описании — чтобы контекст не терялся,
-    // даже если сообщение потом отредактируют или удалят
-    const quote = msg.text && msg.text.trim() !== cardTitle
-      ? msg.text.split('\n').map(l => '> ' + l).join('\n') + '\n\n'
-      : ''
-    const description = `${quote}_Из чата, автор: ${msg.user_name}_`
+    // Текст сообщения в описание больше не копируем: в карточке есть блок
+    // «Из чата», а снимок сообщения сохраняем отдельно (на случай удаления)
+    const description = ''
 
     db.kanban.createCard(column.id, cardTitle, description, null, 'medium', null,
       { message_id: msg.id, channel_id: msg.channel_id })
 
     emitBoardUpdate(column.workspace_id)
     const task = db.taskForMessage(msg.id)
+    if (task?.id) db.setCardSourceSnapshot(task.id, db.messageSnapshot(msg.id))
     io.to(`channel:${msg.channel_id}`).emit('message:task', { messageId: msg.id, task })
     res.json(task)
   } catch (e) {

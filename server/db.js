@@ -179,6 +179,7 @@ try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN source_channel_id INTEGER'
 try { db.prepare('CREATE INDEX IF NOT EXISTS idx_kanban_cards_source_msg ON kanban_cards(source_message_id)').run() } catch { }
 // Колонка messages.crm_done — легаси от «Занести в CRM». В новых БД её больше
 // не создаём, в старых просто не используем (DROP COLUMN в SQLite не стоит риска).
+try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN source_snapshot TEXT').run() } catch { }
 
 // Треды: ответ — обычное сообщение с parent_id. Треды плоские (как в Slack):
 // у ответа не бывает своих ответов. Удалили корень — удаляется и тред.
@@ -391,8 +392,32 @@ function parseMessageRow(row) {
 const MESSAGE_SELECT = `SELECT m.*, u.name as user_name, u.avatar as user_avatar, u.color as user_color
   FROM messages m JOIN users u ON m.user_id = u.id`
 
+// Снимок сообщения для карточки «из чата»: контекст остаётся, даже если
+// сообщение потом удалят из канала
+function messageSnapshot(id) {
+  const m = db.prepare(`
+    SELECT m.id, m.channel_id, m.parent_id, m.text, m.created_at, m.attachment,
+           u.name as user_name, u.avatar as user_avatar, u.color as user_color,
+           ch.name as channel_name, ch.icon as channel_icon
+    FROM messages m JOIN users u ON m.user_id = u.id
+    LEFT JOIN channels ch ON ch.id = m.channel_id
+    WHERE m.id = ?
+  `).get(id)
+  if (!m) return null
+  let attachment_name = null
+  try { attachment_name = m.attachment ? (JSON.parse(m.attachment)?.name || null) : null } catch { }
+  const { attachment, ...rest } = m
+  return { ...rest, attachment_name }
+}
+
+function setCardSourceSnapshot(cardId, snap) {
+  db.prepare('UPDATE kanban_cards SET source_snapshot=? WHERE id=?').run(snap ? JSON.stringify(snap) : null, cardId)
+}
+
 module.exports = {
   taskForMessage,
+  messageSnapshot,
+  setCardSourceSnapshot,
   threadMeta,
 
   // Сообщение целиком (JSON распарсен, задача и сводка треда на месте)
@@ -725,6 +750,12 @@ module.exports = {
       `).get(card.source_message_id) || null) : null
       if (card.source_message?.attachment) {
         try { card.source_message.attachment = JSON.parse(card.source_message.attachment) } catch { card.source_message.attachment = null }
+      }
+      if (card.source_snapshot) {
+        try { card.source_snapshot = JSON.parse(card.source_snapshot) } catch { card.source_snapshot = null }
+      }
+      if (card.source_message && !card.source_message.parent_id) {
+        card.source_message.reply_count = threadMeta(card.source_message.id).reply_count
       }
       return card
     },
