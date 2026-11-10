@@ -5,7 +5,7 @@
 
         <!-- ═══════════════ ПРОСМОТР ═══════════════ -->
         <template v-if="viewOnly">
-          <div class="pv-banner" :class="'banner-' + (u.banner || 'violet')"><div class="banner-pattern" /></div>
+          <div class="pv-banner" :class="'banner-' + bannerId(u.banner)" :style="{ '--bc': u.color }"><div class="banner-pattern" /></div>
           <button class="pm-close on-banner" @click="emit('close')" aria-label="Закрыть">
             <X :size="15" :stroke-width="2.5" />
           </button>
@@ -80,7 +80,7 @@
 
           <!-- Живое превью карточки -->
           <div class="pe-preview">
-            <div class="pp-banner" :class="'banner-' + form.banner"><div class="banner-pattern" /></div>
+            <div class="pp-banner" :class="'banner-' + form.banner" :style="{ '--bc': form.color }"><div class="banner-pattern" /></div>
             <div class="pp-row">
               <button type="button" class="pp-avatar" :class="{ over: dragOver }" :style="avatarStyle(form.color)"
                 title="Загрузить фото" @click="pickFile"
@@ -220,7 +220,9 @@
                   <span class="field-label">Фон профиля</span>
                   <div class="banner-grid">
                     <button v-for="b in BANNERS" :key="b.id" type="button" class="banner-tile"
-                      :class="['banner-' + b.id, { active: form.banner === b.id }]" @click="form.banner = b.id">
+                      :class="['banner-' + b.id, { active: form.banner === b.id }]" :style="{ '--bc': form.color }"
+                      :aria-pressed="form.banner === b.id" :title="b.label" @click="form.banner = b.id">
+                      <span class="banner-pattern" />
                       <span class="bt-label">{{ b.label }}</span>
                       <span v-if="form.banner === b.id" class="bt-check"><Check :size="12" :stroke-width="3" /></span>
                     </button>
@@ -340,10 +342,14 @@ const tabIndex = computed(() => Math.max(0, TABS.findIndex(t => t.id === tab.val
 
 const EMOJI_AVATARS = ['🧑', '👩', '👨', '🧔', '👩‍💻', '👨‍💻', '🦊', '🐼', '🐻', '🐸', '🤖', '👾', '🐱', '🦉', '🐙', '🌵']
 const COLORS  = ['#7c6af7', '#4caf7d', '#e8956d', '#e06c75', '#e8af34', '#61afef', '#c678dd', '#56b6c2']
+// Список должен совпадать с ALLOWED_BANNERS в server/server.js
 const BANNERS = [
-  { id: 'violet', label: 'Фиолетовый' }, { id: 'forest', label: 'Лес' },    { id: 'sunset', label: 'Закат' },
-  { id: 'ocean',  label: 'Океан' },      { id: 'rose',   label: 'Розовый' }, { id: 'mono',   label: 'Моно' }
+  { id: 'auto',   label: 'Под цвет' }, { id: 'violet', label: 'Фиолетовый' }, { id: 'aurora', label: 'Аврора' },
+  { id: 'cosmos', label: 'Космос' },   { id: 'ocean',  label: 'Океан' },      { id: 'forest', label: 'Лес' },
+  { id: 'mint',   label: 'Мята' },     { id: 'sunset', label: 'Закат' },      { id: 'peach',  label: 'Персик' },
+  { id: 'rose',   label: 'Розовый' },  { id: 'mono',   label: 'Моно' }
 ]
+const bannerId = (id) => (BANNERS.some(b => b.id === id) ? id : 'violet')
 
 function initForm() {
   const p = props.user
@@ -352,7 +358,7 @@ function initForm() {
     avatar:       p.avatar || EMOJI_AVATARS[0],
     color:        p.color || COLORS[0],
     description:  p.description || '',
-    banner:       p.banner || 'violet',
+    banner:       bannerId(p.banner),
     title:        p.title || '',
     timezone:     p.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
     status_emoji: p.status_emoji || '',
@@ -668,18 +674,138 @@ onUnmounted(() => {
 }
 .pm-close.on-banner:hover { background: oklch(0 0 0 / 0.45); color: #fff; }
 
-/* ── Баннеры ── */
+/* ── Баннеры ──
+   Каждый баннер = фон (меш из градиентов) + свой узор (--pat) + общий слой зерна.
+   Узор живёт в .banner-pattern, поэтому разметку менять не нужно. */
 .banner-pattern {
-  position: absolute; inset: 0;
-  background-image: radial-gradient(circle at 20% 30%, oklch(1 0 0 / 0.16) 0, transparent 45%),
-                    radial-gradient(circle at 85% 75%, oklch(1 0 0 / 0.10) 0, transparent 40%);
+  position: absolute; inset: 0; overflow: hidden;
+  background-image: var(--pat, none);
+  background-size: var(--pat-size, auto);
+  background-position: var(--pat-pos, 0 0);
+  background-repeat: var(--pat-repeat, repeat);
+  -webkit-mask-image: var(--pat-mask, none);
+          mask-image: var(--pat-mask, none);
+  pointer-events: none;
 }
-.banner-violet { background: linear-gradient(135deg, #6a5adf, #b968d4); }
-.banner-forest { background: linear-gradient(135deg, #276549, #4caf7d); }
-.banner-sunset { background: linear-gradient(135deg, #d97a4a, #e8af34); }
-.banner-ocean  { background: linear-gradient(135deg, #235c85, #61afef); }
-.banner-rose   { background: linear-gradient(135deg, #9c3b53, #e06c75); }
-.banner-mono   { background: linear-gradient(135deg, #33333a, #6b6b73); }
+/* Плёночное зерно — убирает «пластиковость» градиентов */
+.banner-pattern::after {
+  content: ''; position: absolute; inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: .14; mix-blend-mode: overlay;
+}
+
+/* Фиолетовый — мягкие световые пятна */
+.banner-violet {
+  background:
+    radial-gradient(120% 140% at 12% 0%, #9d8cff 0, transparent 55%),
+    radial-gradient(90% 120% at 100% 100%, #e27fd6 0, transparent 60%),
+    linear-gradient(135deg, #5847d4, #9a57cf);
+  --pat: radial-gradient(circle at 22% 38%, oklch(1 0 0 / .22) 0, transparent 26%),
+         radial-gradient(circle at 78% 18%, oklch(1 0 0 / .14) 0, transparent 20%),
+         radial-gradient(circle at 62% 92%, oklch(1 0 0 / .10) 0, transparent 30%);
+}
+/* Лес — топографические кольца */
+.banner-forest {
+  background:
+    radial-gradient(100% 140% at 0% 100%, #5cc48d 0, transparent 55%),
+    linear-gradient(135deg, #17432f, #2f7d56);
+  --pat: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='160'%3E%3Cg fill='none' stroke='white' stroke-opacity='.17' stroke-width='1.2'%3E%3Cellipse cx='260' cy='130' rx='26' ry='18'/%3E%3Cellipse cx='256' cy='128' rx='52' ry='36'/%3E%3Cellipse cx='252' cy='126' rx='80' ry='56'/%3E%3Cellipse cx='246' cy='124' rx='110' ry='78'/%3E%3Cellipse cx='240' cy='122' rx='142' ry='102'/%3E%3Cellipse cx='232' cy='120' rx='178' ry='128'/%3E%3Cellipse cx='224' cy='118' rx='218' ry='156'/%3E%3C/g%3E%3C/svg%3E");
+  --pat-size: cover; --pat-repeat: no-repeat; --pat-pos: right bottom;
+}
+/* Закат — солнце и полосы горизонта */
+.banner-sunset {
+  background:
+    radial-gradient(38% 90% at 80% 105%, #ffe08a 0, #ffc25a 40%, transparent 72%),
+    linear-gradient(180deg, #c9506a 0%, #e27a45 55%, #efab3a 100%);
+  --pat: repeating-linear-gradient(180deg, transparent 0 9px, oklch(1 0 0 / .20) 9px 11px);
+  --pat-mask: linear-gradient(180deg, transparent 45%, #000 100%);
+}
+/* Океан — волны */
+.banner-ocean {
+  background:
+    radial-gradient(90% 140% at 100% 0%, #6fc3ff 0, transparent 55%),
+    linear-gradient(160deg, #163f66, #2d7fc0);
+  --pat: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='22'%3E%3Cpath d='M0 11 Q15 3 30 11 T60 11 T90 11 T120 11' fill='none' stroke='white' stroke-opacity='.2' stroke-width='1.4'/%3E%3C/svg%3E");
+  --pat-size: 120px 22px;
+  --pat-mask: linear-gradient(180deg, transparent 10%, #000 85%);
+}
+/* Розовый — точечная сетка */
+.banner-rose {
+  background:
+    radial-gradient(100% 140% at 100% 0%, #f08a8a 0, transparent 55%),
+    linear-gradient(135deg, #7d2945, #d25a6c);
+  --pat: radial-gradient(oklch(1 0 0 / .28) 1.1px, transparent 1.6px);
+  --pat-size: 14px 14px;
+  --pat-mask: linear-gradient(110deg, #000 0%, transparent 70%);
+}
+/* Моно — инженерная сетка */
+.banner-mono {
+  background:
+    radial-gradient(90% 140% at 0% 0%, #6e6e78 0, transparent 60%),
+    linear-gradient(135deg, #222227, #47474f);
+  --pat: linear-gradient(oklch(1 0 0 / .08) 1px, transparent 1px),
+         linear-gradient(90deg, oklch(1 0 0 / .08) 1px, transparent 1px);
+  --pat-size: 18px 18px;
+  --pat-mask: radial-gradient(120% 120% at 100% 0%, #000 0%, transparent 75%);
+}
+/* Аврора — переливающиеся ленты (анимируются в большом баннере) */
+.banner-aurora {
+  background: linear-gradient(180deg, #0b1026, #141a3a);
+  --pat: radial-gradient(60% 80% at 20% 60%, oklch(0.8 0.17 160 / .65) 0, transparent 70%),
+         radial-gradient(50% 70% at 55% 30%, oklch(0.75 0.13 200 / .55) 0, transparent 70%),
+         radial-gradient(55% 80% at 85% 65%, oklch(0.65 0.2 300 / .6) 0, transparent 70%);
+  --pat-size: 160% 100%;
+}
+/* Космос — звёзды */
+.banner-cosmos {
+  background:
+    radial-gradient(70% 120% at 85% 120%, #4b3aa8 0, transparent 60%),
+    radial-gradient(50% 90% at 10% -10%, #26306b 0, transparent 60%),
+    #0e0c1f;
+  --pat: radial-gradient(1.2px 1.2px at 12px 18px, #fff 50%, transparent 100%),
+         radial-gradient(1px 1px at 64px 44px, oklch(1 0 0 / .8) 50%, transparent 100%),
+         radial-gradient(1.6px 1.6px at 102px 12px, #fff 50%, transparent 100%),
+         radial-gradient(1px 1px at 38px 70px, oklch(1 0 0 / .6) 50%, transparent 100%),
+         radial-gradient(1.3px 1.3px at 128px 62px, oklch(1 0 0 / .9) 50%, transparent 100%),
+         radial-gradient(1px 1px at 88px 84px, oklch(1 0 0 / .5) 50%, transparent 100%);
+  --pat-size: 150px 96px;
+}
+/* Персик — светлый, тёплый */
+.banner-peach {
+  background:
+    radial-gradient(90% 140% at 0% 0%, #ffd9b8 0, transparent 60%),
+    radial-gradient(80% 120% at 100% 100%, #f4a3bf 0, transparent 60%),
+    linear-gradient(135deg, #f7b98f, #ee9bb0);
+  --pat: repeating-radial-gradient(circle at 100% 0%, transparent 0 14px, oklch(1 0 0 / .28) 14px 15.5px);
+  --pat-mask: linear-gradient(225deg, #000 0%, transparent 65%);
+}
+/* Мята — диагональная штриховка */
+.banner-mint {
+  background:
+    radial-gradient(90% 140% at 100% 0%, #b9f0d6 0, transparent 60%),
+    linear-gradient(135deg, #1f8f84, #4fc39b);
+  --pat: repeating-linear-gradient(-45deg, oklch(1 0 0 / .14) 0 1.5px, transparent 1.5px 11px);
+  --pat-mask: linear-gradient(90deg, transparent 0%, #000 100%);
+}
+/* Под цвет — строится из «Цвета имени» (переменная --bc задаётся в разметке) */
+.banner-auto {
+  --bc: #7c6af7;
+  background:
+    radial-gradient(90% 140% at 0% 0%, color-mix(in oklab, var(--bc) 50%, white) 0, transparent 60%),
+    radial-gradient(80% 120% at 100% 100%, color-mix(in oklab, var(--bc) 75%, black) 0, transparent 65%),
+    linear-gradient(135deg, color-mix(in oklab, var(--bc) 85%, white), var(--bc));
+  --pat: radial-gradient(oklch(1 0 0 / .22) 1px, transparent 1.5px);
+  --pat-size: 12px 12px;
+  --pat-mask: linear-gradient(250deg, #000 0%, transparent 55%);
+}
+
+/* Плавное движение авроры — только в больших баннерах */
+.pv-banner.banner-aurora .banner-pattern,
+.pp-banner.banner-aurora .banner-pattern { animation: aurora-drift 14s ease-in-out infinite alternate; }
+@keyframes aurora-drift {
+  from { background-position: 0% 0; }
+  to   { background-position: 100% 0; }
+}
 
 /* ── Общие кнопки ── */
 .btn {
@@ -705,7 +831,7 @@ onUnmounted(() => {
 
 /* ═════ Просмотр ═════ */
 .pm:not(.pm-edit) { overflow-y: auto; scrollbar-width: none; }
-.pv-banner { position: relative; flex: none; height: 104px; }
+.pv-banner { position: relative; flex: none; height: 116px; overflow: hidden; }
 .pv-head {
   display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-3);
   padding: 0 var(--space-5);
@@ -792,7 +918,7 @@ onUnmounted(() => {
   overflow: hidden;
   background: var(--surface-2);
 }
-.pp-banner { position: relative; height: 44px; transition: background .3s ease; }
+.pp-banner { position: relative; height: 56px; overflow: hidden; }
 .pp-row { display: flex; align-items: flex-end; gap: var(--space-3); padding: 0 var(--space-3) var(--space-3); margin-top: -24px; position: relative; }
 .pp-avatar {
   position: relative; flex: none;
@@ -964,10 +1090,12 @@ onUnmounted(() => {
 .preset-until { flex: none; font-size: 11px; color: var(--text-faint); }
 
 /* Оформление */
-.banner-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.banner-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+@media (max-width: 420px) { .banner-grid { grid-template-columns: repeat(3, 1fr); } }
 .banner-tile {
   position: relative;
   height: 56px; border-radius: var(--radius-md);
+  overflow: hidden;
   display: flex; align-items: flex-end;
   padding: 6px 8px;
   outline: 2px solid transparent; outline-offset: 2px;
@@ -975,9 +1103,10 @@ onUnmounted(() => {
 }
 .banner-tile:hover { transform: translateY(-2px); }
 .banner-tile.active { outline-color: var(--accent); }
-.bt-label { font-size: 11px; font-weight: 600; color: #fff; text-shadow: 0 1px 2px oklch(0 0 0 / 0.35); }
+.banner-tile:focus-visible { outline-color: var(--accent-line); }
+.bt-label { position: relative; z-index: 1; font-size: 11px; font-weight: 600; color: #fff; text-shadow: 0 1px 2px oklch(0 0 0 / 0.35); }
 .bt-check {
-  position: absolute; top: 6px; right: 6px;
+  position: absolute; top: 6px; right: 6px; z-index: 1;
   width: 18px; height: 18px; border-radius: 50%;
   display: grid; place-items: center;
   background: #fff; color: #222;
@@ -1081,6 +1210,6 @@ onUnmounted(() => {
 @media (prefers-reduced-motion: reduce) {
   .pm, .pm-overlay, .pe-ink, .pp-avatar, .banner-tile, .color-dot, .emoji-pick { transition: none; }
   .pe-fade-enter-active, .pe-fade-leave-active, .pe-pop-enter-active, .pe-pop-leave-active { transition: none; }
-  .bt-check, .color-dot svg, .spinner { animation: none; }
+  .bt-check, .color-dot svg, .spinner, .banner-pattern { animation: none !important; }
 }
 </style>

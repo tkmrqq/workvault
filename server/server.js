@@ -694,6 +694,9 @@ app.patch('/api/users/:id', (req, res) => {
     return res.status(403).json({ error: 'Можно редактировать только свой профиль' })
   }
   const { name, avatar, color, description, banner } = req.body
+  // Баннер — только из известного списка (см. BANNERS в ProfileModal.vue), иначе в БД можно записать что угодно
+  const ALLOWED_BANNERS = ['auto', 'violet', 'aurora', 'cosmos', 'ocean', 'forest', 'mint', 'sunset', 'peach', 'rose', 'mono']
+  const bannerIn = ALLOWED_BANNERS.includes(banner) ? banner : null
   const b = req.body || {}
   // Аватар — либо эмодзи, либо путь к фото, загруженному через /avatar. Чужие URL не принимаем.
   let avatarIn = typeof avatar === 'string' ? avatar.trim() : null
@@ -720,7 +723,7 @@ app.patch('/api/users/:id', (req, res) => {
       WHERE id = ?
     `).run(name || null, avatarIn || null, color || null,
       description !== undefined ? description : null,
-      banner || null, req.params.id)
+      bannerIn, req.params.id)
 
     // Поля, которые можно и очистить — трогаем, только если они пришли в запросе
     const sets = [], vals = []
