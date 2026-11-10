@@ -1,14 +1,14 @@
 <template>
   <div class="cropper">
-    <div class="cr-stage" :class="{ grabbing: drag }"
+    <div class="cr-stage" :class="{ grabbing: drag }" :style="{ width: SW + 'px', height: SH + 'px' }"
       @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="up"
       @wheel.prevent="wheel" @dblclick="reset">
       <img v-if="url" ref="imgEl" :src="url" class="cr-img" :style="imgStyle" draggable="false" alt="" @load="onLoad" />
-      <div class="cr-mask" />
+      <div class="cr-mask" :class="{ round }" />
       <div v-if="!ready" class="cr-loading"><span class="cr-spin" /></div>
     </div>
 
-    <div class="cr-zoom">
+    <div class="cr-zoom" :style="{ width: SW + 'px' }">
       <button type="button" class="cr-z" @click="setZoom(zoom - 0.25)" aria-label="Отдалить"><ZoomOut :size="15" :stroke-width="2" /></button>
       <input type="range" min="1" max="4" step="0.01" :value="zoom" @input="setZoom(Number($event.target.value))" aria-label="Масштаб" />
       <button type="button" class="cr-z" @click="setZoom(zoom + 0.25)" aria-label="Приблизить"><ZoomIn :size="15" :stroke-width="2" /></button>
@@ -24,16 +24,25 @@
 </template>
 
 <script setup>
-// Простое кадрирование под круглый аватар: перетаскивание, колесо/ползунок —
-// масштаб, двойной клик — сброс. На выходе квадрат 320×320 (WebP, иначе PNG).
+// Простое кадрирование: перетаскивание, колесо/ползунок — масштаб, двойной
+// клик — сброс. По умолчанию — круглый аватар 320×320; для баннера передаём
+// aspect=3, round=false, outWidth=1200. На выходе WebP (иначе PNG).
 import { ref, computed, onUnmounted } from 'vue'
 import { ZoomIn, ZoomOut, Check } from 'lucide-vue-next'
 
-const props = defineProps({ file: { type: Object, required: true } })
+const props = defineProps({
+  file:     { type: Object,  required: true },
+  aspect:   { type: Number,  default: 1 },    // ширина / высота области
+  round:    { type: Boolean, default: true }, // круглая маска (аватар) или прямоугольник
+  outWidth: { type: Number,  default: 320 }   // ширина результата, px
+})
 const emit  = defineEmits(['cancel', 'done'])
 
-const S   = 240   // размер области, px (совпадает с CSS)
-const OUT = 320   // размер результата, px
+// Размер области на экране: квадрат 240px, широкие кадры — до 360px в ширину
+const SW    = props.aspect >= 1 ? Math.min(360, Math.round(240 * props.aspect)) : 240
+const SH    = Math.round(SW / props.aspect)
+const OUT_W = props.outWidth
+const OUT_H = Math.round(props.outWidth / props.aspect)
 
 const url   = ref(URL.createObjectURL(props.file))
 const imgEl = ref(null)
@@ -45,7 +54,7 @@ const drag  = ref(null)
 
 onUnmounted(() => URL.revokeObjectURL(url.value))
 
-const scale = computed(() => (S / Math.min(nat.value.w, nat.value.h)) * zoom.value)
+const scale = computed(() => Math.max(SW / nat.value.w, SH / nat.value.h) * zoom.value)
 const dims  = computed(() => ({ w: nat.value.w * scale.value, h: nat.value.h * scale.value }))
 const imgStyle = computed(() => ({
   width:  dims.value.w + 'px',
@@ -57,13 +66,13 @@ const imgStyle = computed(() => ({
 function clamp(p) {
   const { w, h } = dims.value
   return {
-    x: Math.min(0, Math.max(S - w, p.x)),
-    y: Math.min(0, Math.max(S - h, p.y))
+    x: Math.min(0, Math.max(SW - w, p.x)),
+    y: Math.min(0, Math.max(SH - h, p.y))
   }
 }
 function reset() {
   zoom.value = 1
-  pos.value = clamp({ x: (S - dims.value.w) / 2, y: (S - dims.value.h) / 2 })
+  pos.value = clamp({ x: (SW - dims.value.w) / 2, y: (SH - dims.value.h) / 2 })
 }
 function onLoad() {
   const img = imgEl.value
@@ -75,8 +84,8 @@ function onLoad() {
 function setZoom(z) {
   const nz = Math.min(4, Math.max(1, z))
   const k = nz / zoom.value
-  const c = S / 2
-  const next = { x: c - (c - pos.value.x) * k, y: c - (c - pos.value.y) * k }
+  const cx = SW / 2, cy = SH / 2
+  const next = { x: cx - (cx - pos.value.x) * k, y: cy - (cy - pos.value.y) * k }
   zoom.value = nz
   pos.value = clamp(next)
 }
@@ -96,15 +105,16 @@ function up() { drag.value = null }
 
 function apply() {
   const canvas = document.createElement('canvas')
-  canvas.width = canvas.height = OUT
+  canvas.width = OUT_W
+  canvas.height = OUT_H
   const ctx = canvas.getContext('2d')
   ctx.imageSmoothingQuality = 'high'
   const s = scale.value
-  ctx.drawImage(imgEl.value, -pos.value.x / s, -pos.value.y / s, S / s, S / s, 0, 0, OUT, OUT)
+  ctx.drawImage(imgEl.value, -pos.value.x / s, -pos.value.y / s, SW / s, SH / s, 0, 0, OUT_W, OUT_H)
   canvas.toBlob(blob => {
     if (blob && blob.type === 'image/webp') return emit('done', blob)
     canvas.toBlob(png => png && emit('done', png), 'image/png')
-  }, 'image/webp', 0.9)
+  }, 'image/webp', props.round ? 0.9 : 0.85)
 }
 </script>
 
@@ -112,7 +122,7 @@ function apply() {
 .cropper { display: flex; flex-direction: column; align-items: center; gap: var(--space-4); }
 .cr-stage {
   position: relative;
-  width: 240px; height: 240px;
+  max-width: 100%;
   border-radius: var(--radius-lg);
   overflow: hidden;
   background: repeating-conic-gradient(var(--surface-3) 0 25%, var(--surface-2) 0 50%) 0 0 / 16px 16px;
@@ -130,12 +140,13 @@ function apply() {
 }
 .cr-mask {
   position: absolute; inset: 0;
-  border-radius: 50%;
+  border-radius: var(--radius-lg);
   box-shadow: 0 0 0 999px oklch(0 0 0 / 0.55);
   outline: 2px solid oklch(1 0 0 / 0.85);
   outline-offset: -2px;
   pointer-events: none;
 }
+.cr-mask.round { border-radius: 50%; }
 .cr-loading { position: absolute; inset: 0; display: grid; place-items: center; }
 .cr-spin {
   width: 22px; height: 22px; border-radius: 50%;
@@ -144,7 +155,7 @@ function apply() {
 }
 @keyframes crspin { to { transform: rotate(360deg); } }
 
-.cr-zoom { display: flex; align-items: center; gap: var(--space-2); width: 240px; }
+.cr-zoom { display: flex; align-items: center; gap: var(--space-2); max-width: 100%; }
 .cr-zoom input { flex: 1; accent-color: var(--accent); }
 .cr-z {
   width: 28px; height: 28px; border-radius: var(--radius-full);

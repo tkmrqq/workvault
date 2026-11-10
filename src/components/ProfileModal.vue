@@ -5,7 +5,7 @@
 
         <!-- ═══════════════ ПРОСМОТР ═══════════════ -->
         <template v-if="viewOnly">
-          <div class="pv-banner" :class="'banner-' + bannerId(u.banner)" :style="{ '--bc': u.color }"><div class="banner-pattern" /></div>
+          <div class="pv-banner" :class="bannerClass(u.banner)" :style="bannerStyle(u.banner, u.color)"><div class="banner-pattern" /></div>
           <button class="pm-close on-banner" @click="emit('close')" aria-label="Закрыть">
             <X :size="15" :stroke-width="2.5" />
           </button>
@@ -80,7 +80,7 @@
 
           <!-- Живое превью карточки -->
           <div class="pe-preview">
-            <div class="pp-banner" :class="'banner-' + form.banner" :style="{ '--bc': form.color }"><div class="banner-pattern" /></div>
+            <div class="pp-banner" :class="bannerClass(formBannerValue)" :style="bannerStyle(formBannerValue, form.color)"><div class="banner-pattern" /></div>
             <div class="pp-row">
               <button type="button" class="pp-avatar" :class="{ over: dragOver }" :style="avatarStyle(form.color)"
                 title="Загрузить фото" @click="pickFile"
@@ -219,6 +219,17 @@
                 <div class="field">
                   <span class="field-label">Фон профиля</span>
                   <div class="banner-grid">
+                    <button type="button" class="banner-tile bt-photo"
+                      :class="[bannerPhotoSrc ? 'banner-photo' : 'bt-empty', { active: form.banner === 'photo', over: bannerDragOver }]"
+                      :style="bannerPhotoSrc ? bannerStyle(bannerPhotoSrc, form.color) : null"
+                      :aria-pressed="form.banner === 'photo'" title="Своя картинка"
+                      @click="bannerPhotoSrc ? (form.banner = 'photo') : pickBannerFile()"
+                      @dragenter.prevent="bannerDragOver = true" @dragover.prevent="bannerDragOver = true"
+                      @dragleave.prevent="bannerDragOver = false" @drop.prevent="onBannerDrop">
+                      <ImagePlus v-if="!bannerPhotoSrc" class="bt-icon" :size="16" :stroke-width="2" />
+                      <span class="bt-label">{{ bannerPhotoSrc ? 'Своё фото' : 'Загрузить' }}</span>
+                      <span v-if="form.banner === 'photo'" class="bt-check"><Check :size="12" :stroke-width="3" /></span>
+                    </button>
                     <button v-for="b in BANNERS" :key="b.id" type="button" class="banner-tile"
                       :class="['banner-' + b.id, { active: form.banner === b.id }]" :style="{ '--bc': form.color }"
                       :aria-pressed="form.banner === b.id" :title="b.label" @click="form.banner = b.id">
@@ -227,6 +238,15 @@
                       <span v-if="form.banner === b.id" class="bt-check"><Check :size="12" :stroke-width="3" /></span>
                     </button>
                   </div>
+                  <div v-if="bannerPhotoSrc" class="avatar-tools banner-tools">
+                    <button type="button" class="btn btn-soft" @click="pickBannerFile">
+                      <Upload :size="14" :stroke-width="2.2" /> Заменить фото
+                    </button>
+                    <button type="button" class="btn btn-ghost danger" @click="removeBannerPhoto">
+                      <Trash2 :size="14" :stroke-width="2.2" /> Убрать
+                    </button>
+                  </div>
+                  <p class="field-hint">Своя картинка: PNG, JPG, WebP или GIF, лучше широкая (3:1). Можно перетащить на плитку.</p>
                 </div>
 
                 <div class="field">
@@ -282,13 +302,16 @@
           </footer>
 
           <input ref="fileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden @change="onFileInput" />
+          <input ref="bannerInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden @change="onBannerInput" />
 
           <Transition name="pe-fade">
             <div v-if="cropFile" class="crop-layer" @mousedown.self="cropFile = null">
-              <div class="crop-card">
-                <h3>Фото профиля</h3>
+              <div class="crop-card" :class="{ wide: cropTarget === 'banner' }">
+                <h3>{{ cropTarget === 'banner' ? 'Фон профиля' : 'Фото профиля' }}</h3>
                 <p>Перетащи и приблизь, чтобы выбрать область</p>
-                <AvatarCropper :file="cropFile" @cancel="cropFile = null" @done="onCropped" />
+                <AvatarCropper v-if="cropTarget === 'banner'" :file="cropFile" :aspect="3" :round="false" :out-width="1200"
+                  @cancel="cropFile = null" @done="onBannerCropped" />
+                <AvatarCropper v-else :file="cropFile" @cancel="cropFile = null" @done="onCropped" />
               </div>
             </div>
           </Transition>
@@ -303,12 +326,12 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { getApiBase } from '@/lib/apiBase'
-import { isImageAvatar } from '@/lib/avatar'
+import { isImageAvatar, avatarSrc } from '@/lib/avatar'
 import { confirmDialog } from '@/composables/useConfirm'
 import AvatarCropper from './AvatarCropper.vue'
 import {
   X, Calendar, Clock, Globe, AtSign, MessageSquare, Camera, Upload, Trash2,
-  RefreshCw, LogOut, Check, ChevronRight, User, Smile, Palette, Shield
+  RefreshCw, LogOut, Check, ChevronRight, User, Smile, Palette, Shield, ImagePlus
 } from 'lucide-vue-next'
 
 const props = defineProps({
@@ -350,6 +373,15 @@ const BANNERS = [
   { id: 'rose',   label: 'Розовый' },  { id: 'mono',   label: 'Моно' }
 ]
 const bannerId = (id) => (BANNERS.some(b => b.id === id) ? id : 'violet')
+// Своя картинка хранится в том же поле banner — путём /uploads/banner-*.webp.
+// Во время редактирования бывает ещё blob: — превью до сохранения.
+const isPhotoBanner = (v) => typeof v === 'string' && (v.startsWith('/uploads/banner-') || v.startsWith('blob:'))
+const bannerClass = (v) => (isPhotoBanner(v) ? 'banner-photo' : 'banner-' + bannerId(v))
+function bannerStyle(v, color) {
+  if (!isPhotoBanner(v)) return { '--bc': color }
+  const src = v.startsWith('blob:') ? v : avatarSrc(v)
+  return { '--bc': color, backgroundImage: `url("${src}")` }
+}
 
 function initForm() {
   const p = props.user
@@ -358,7 +390,7 @@ function initForm() {
     avatar:       p.avatar || EMOJI_AVATARS[0],
     color:        p.color || COLORS[0],
     description:  p.description || '',
-    banner:       bannerId(p.banner),
+    banner:       isPhotoBanner(p.banner) ? 'photo' : bannerId(p.banner),
     title:        p.title || '',
     timezone:     p.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
     status_emoji: p.status_emoji || '',
@@ -379,7 +411,38 @@ const lastEmoji = isImageAvatar(props.user.avatar) ? EMOJI_AVATARS[0] : (props.u
 
 const previewAvatar = computed(() => pendingUrl.value || form.avatar)
 const hasPhoto = computed(() => !!pendingUrl.value || isImageAvatar(form.avatar))
-const dirty = computed(() => !!pendingBlob.value || JSON.stringify({ ...form }) !== initialSnapshot)
+// ── Свой баннер ──
+const bannerInput      = ref(null)
+const cropTarget       = ref('avatar')   // для какого поля открыт кроппер
+const bannerDragOver   = ref(false)
+const bannerPhoto      = ref(isPhotoBanner(props.user.banner) ? props.user.banner : '') // уже сохранённая
+const bannerPendingBlob = ref(null)
+const bannerPendingUrl  = ref('')
+const bannerPhotoSrc   = computed(() => bannerPendingUrl.value || bannerPhoto.value)
+const formBannerValue  = computed(() => (form.banner === 'photo' ? bannerPhotoSrc.value : form.banner))
+
+function clearBannerPending() {
+  if (bannerPendingUrl.value) URL.revokeObjectURL(bannerPendingUrl.value)
+  bannerPendingUrl.value = ''
+  bannerPendingBlob.value = null
+}
+function pickBannerFile() { bannerInput.value?.click() }
+function onBannerInput(e) { acceptFile(e.target.files?.[0], 'banner'); e.target.value = '' }
+function onBannerDrop(e) { bannerDragOver.value = false; acceptFile(e.dataTransfer?.files?.[0], 'banner') }
+function onBannerCropped(blob) {
+  clearBannerPending()
+  bannerPendingBlob.value = blob
+  bannerPendingUrl.value = URL.createObjectURL(blob)
+  form.banner = 'photo'
+  cropFile.value = null
+}
+function removeBannerPhoto() {
+  clearBannerPending()
+  bannerPhoto.value = ''
+  if (form.banner === 'photo') form.banner = 'auto'
+}
+
+const dirty = computed(() => !!pendingBlob.value || !!bannerPendingBlob.value || JSON.stringify({ ...form }) !== initialSnapshot)
 
 function clearPending() {
   if (pendingUrl.value) URL.revokeObjectURL(pendingUrl.value)
@@ -387,11 +450,12 @@ function clearPending() {
   pendingBlob.value = null
 }
 function pickFile() { fileInput.value?.click() }
-function acceptFile(f) {
+function acceptFile(f, target = 'avatar') {
   error.value = ''
   if (!f) return
   if (!/^image\/(png|jpeg|webp|gif)$/.test(f.type)) { error.value = 'Нужна картинка: PNG, JPG, WebP или GIF'; return }
   if (f.size > 15 * 1024 * 1024) { error.value = 'Картинка больше 15 МБ'; return }
+  cropTarget.value = target
   cropFile.value = f
 }
 function onFileInput(e) { acceptFile(e.target.files?.[0]); e.target.value = '' }
@@ -553,6 +617,19 @@ async function save() {
       if (!r.ok || !j.url) throw new Error(j.error || 'Не удалось загрузить фото')
       avatar = j.url
     }
+    let banner = form.banner
+    if (banner === 'photo') {
+      banner = bannerPhoto.value
+      if (bannerPendingBlob.value) {
+        const fd = new FormData()
+        fd.append('file', bannerPendingBlob.value, bannerPendingBlob.value.type === 'image/webp' ? 'banner.webp' : 'banner.png')
+        const r = await fetch(`${API}/api/users/${props.user.id}/banner`, { method: 'POST', body: fd })
+        const j = await r.json().catch(() => ({}))
+        if (!r.ok || !j.url) throw new Error(j.error || 'Не удалось загрузить фон')
+        banner = j.url
+      }
+      if (!banner) banner = 'auto'
+    }
     const res = await fetch(`${API}/api/users/${props.user.id}`, {
       method:  'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -561,7 +638,7 @@ async function save() {
         avatar,
         color:        form.color,
         description:  form.description,
-        banner:       form.banner,
+        banner,
         title:        form.title,
         timezone:     form.timezone,
         status_emoji: form.status_emoji,
@@ -572,6 +649,7 @@ async function save() {
     const updated = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(updated.error || 'Не удалось сохранить')
     clearPending()
+    clearBannerPending()
     store.user = { ...store.user, ...updated }
     emit('updated', updated)
     emit('close')
@@ -592,6 +670,7 @@ async function requestClose() {
     if (!ok) return
   }
   clearPending()
+  clearBannerPending()
   emit('close')
 }
 
@@ -1103,6 +1182,24 @@ onUnmounted(() => {
 }
 .banner-tile:hover { transform: translateY(-2px); }
 .banner-tile.active { outline-color: var(--accent); }
+/* Своя картинка */
+.banner-photo {
+  background-color: var(--surface-2);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+.banner-photo .banner-pattern { display: none; }
+.banner-tile.bt-empty {
+  flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  background: var(--surface-2);
+  border: 1px dashed var(--border);
+  color: var(--text-muted);
+}
+.banner-tile.bt-empty .bt-label { color: var(--text-muted); text-shadow: none; }
+.banner-tile.bt-empty:hover, .banner-tile.over { border-color: var(--accent); color: var(--text); }
+.banner-tile.over { outline-color: var(--accent); }
+.banner-tools { margin-top: 8px; }
 .banner-tile:focus-visible { outline-color: var(--accent-line); }
 .bt-label { position: relative; z-index: 1; font-size: 11px; font-weight: 600; color: #fff; text-shadow: 0 1px 2px oklch(0 0 0 / 0.35); }
 .bt-check {
@@ -1190,6 +1287,7 @@ onUnmounted(() => {
   box-shadow: var(--shadow-lg);
   text-align: center;
 }
+.crop-card.wide { width: min(420px, 100%); }
 .crop-card h3 { font-size: var(--text-base); font-weight: 700; color: var(--text); }
 .crop-card p { font-size: 12px; color: var(--text-faint); margin: 2px 0 var(--space-4); }
 

@@ -695,18 +695,20 @@ app.patch('/api/users/:id', (req, res) => {
   }
   const { name, avatar, color, description, banner } = req.body
   // Баннер — только из известного списка (см. BANNERS в ProfileModal.vue), иначе в БД можно записать что угодно
+  // Или путь к своей картинке, загруженной через /banner, — и только к своей.
   const ALLOWED_BANNERS = ['auto', 'violet', 'aurora', 'cosmos', 'ocean', 'forest', 'mint', 'sunset', 'peach', 'rose', 'mono']
-  const bannerIn = ALLOWED_BANNERS.includes(banner) ? banner : null
+  const bannerIn = ALLOWED_BANNERS.includes(banner) || isOwnUpload(banner, 'banner', req.params.id) ? banner : null
   const b = req.body || {}
   // Аватар — либо эмодзи, либо путь к фото, загруженному через /avatar. Чужие URL не принимаем.
   let avatarIn = typeof avatar === 'string' ? avatar.trim() : null
   if (avatarIn && avatarIn.includes('/')) {
-    const ok = avatarIn.startsWith('/uploads/avatar-') && !avatarIn.includes('..') && avatarIn.split('/').length === 3
-    if (!ok) avatarIn = null
+    if (!isOwnUpload(avatarIn, 'avatar', req.params.id)) avatarIn = null
   } else if (avatarIn) {
     avatarIn = avatarIn.slice(0, 16)
   }
-  const prevAvatar = db.getUserById(req.params.id)?.avatar
+  const prev = db.getUserById(req.params.id)
+  const prevAvatar = prev?.avatar
+  const prevBanner = prev?.banner
   const clip = (v, n) => (v == null ? null : (String(v).trim().slice(0, n) || null))
   const validTz = (tz) => {
     if (!tz) return null
@@ -744,6 +746,9 @@ app.patch('/api/users/:id', (req, res) => {
     if (prevAvatar && prevAvatar !== updated?.avatar && prevAvatar.startsWith('/uploads/avatar-')) {
       fs.unlink(path.join(UPLOADS_DIR, path.basename(prevAvatar)), () => {})
     }
+    if (prevBanner && prevBanner !== updated?.banner && prevBanner.startsWith('/uploads/banner-')) {
+      fs.unlink(path.join(UPLOADS_DIR, path.basename(prevBanner)), () => {})
+    }
     io.emit('user:updated', updated)
     res.json(updated)
   } catch (e) {
@@ -751,31 +756,41 @@ app.patch('/api/users/:id', (req, res) => {
   }
 })
 
-// ─── AVATAR UPLOAD ──────────────────────────────────────
-// Клиент уже кадрирует и сжимает фото до 320×320, поэтому лимит небольшой.
-// В БД фото попадает только через PATCH /api/users/:id (поле avatar).
-const AVATAR_MIME = { 'image/webp': '.webp', 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif' }
-const avatarUpload = multer({
+// ─── AVATAR / BANNER UPLOAD ─────────────────────────────
+// Клиент уже кадрирует и сжимает картинку (аватар 320×320, фон 1200×400),
+// поэтому лимит небольшой. В БД путь попадает только через PATCH /api/users/:id.
+const PROFILE_IMG_MIME = { 'image/webp': '.webp', 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif' }
+const profileImageUpload = (kind) => multer({
   storage: multer.diskStorage({
     destination: (_, __, cb) => cb(null, UPLOADS_DIR),
-    filename: (req, file, cb) => cb(null, `avatar-${Number(req.params.id)}-${Date.now()}${AVATAR_MIME[file.mimetype] || '.png'}`)
+    filename: (req, file, cb) => cb(null, `${kind}-${Number(req.params.id)}-${Date.now()}${PROFILE_IMG_MIME[file.mimetype] || '.png'}`)
   }),
   limits: { fileSize: 4 * 1024 * 1024, files: 1 },
-  fileFilter: (_, file, cb) => AVATAR_MIME[file.mimetype]
+  fileFilter: (_, file, cb) => PROFILE_IMG_MIME[file.mimetype]
     ? cb(null, true)
     : cb(new Error('Нужна картинка: PNG, JPG, WebP или GIF'), false)
 })
 
-app.post('/api/users/:id/avatar', (req, res) => {
-  if (!req.user || (Number(req.params.id) !== req.user.id && req.user.role !== 'admin')) {
-    return res.status(403).json({ error: 'Можно менять только свой аватар' })
-  }
-  avatarUpload.single('file')(req, res, (err) => {
-    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Файл больше 4 МБ' : err.message })
-    if (!req.file) return res.status(400).json({ error: 'Файл не получен' })
-    res.json({ url: `/uploads/${req.file.filename}` })
+// Путь вида /uploads/<kind>-<userId>-<ts>.<ext>, загруженный именно этим юзером.
+// Чужой файл подставить нельзя — иначе при следующей смене мы бы его удалили.
+function isOwnUpload(v, kind, userId) {
+  return typeof v === 'string'
+    && new RegExp(`^/uploads/${kind}-${Number(userId)}-\\d+\\.(webp|png|jpg|gif)$`).test(v)
+}
+
+for (const [kind, label] of [['avatar', 'аватар'], ['banner', 'фон профиля']]) {
+  const uploader = profileImageUpload(kind)
+  app.post(`/api/users/:id/${kind}`, (req, res) => {
+    if (!req.user || (Number(req.params.id) !== req.user.id && req.user.role !== 'admin')) {
+      return res.status(403).json({ error: `Можно менять только свой ${label}` })
+    }
+    uploader.single('file')(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Файл больше 4 МБ' : err.message })
+      if (!req.file) return res.status(400).json({ error: 'Файл не получен' })
+      res.json({ url: `/uploads/${req.file.filename}` })
+    })
   })
-})
+}
 
 app.get('/api/users/:id/stats', (req, res) => {
   const id = Number(req.params.id)
