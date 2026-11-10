@@ -40,9 +40,23 @@ function createWindow() {
     show: false
   })
 
+  // Без фильтра ссылка вида file:///C:/Windows/System32/calc.exe или smb://
+  // из чата запускала бы произвольные программы/сетевые шары
+  const SAFE_EXTERNAL = new Set(['http:', 'https:', 'mailto:'])
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    try {
+      if (SAFE_EXTERNAL.has(new URL(url).protocol)) shell.openExternal(url)
+    } catch { }
     return { action: 'deny' }
+  })
+  // И не даём самому окну уйти на чужой сайт (там был бы доступ к preload API)
+  mainWindow.webContents.on('will-navigate', (e, url) => {
+    const current = mainWindow.webContents.getURL()
+    try {
+      if (new URL(url).origin === new URL(current).origin) return
+    } catch { }
+    e.preventDefault()
+    try { if (SAFE_EXTERNAL.has(new URL(url).protocol)) shell.openExternal(url) } catch { }
   })
 
   // Проверка орфографии: русский + английский (на macOS язык берётся из системы)

@@ -75,29 +75,42 @@ const LOGIN_MAX_ATTEMPTS = 5
 const LOGIN_WINDOW_MS = 15 * 60 * 1000
 const loginAttempts = new Map() // key (name+ip) → { count, firstAt }
 
-function loginRateLimit(req, res, next) {
-  const key = `${(req.body?.name || '').toLowerCase()}:${req.ip}`
+const IP_MAX_ATTEMPTS = 30 // неудачных попыток с одного IP за окно — по любым именам
+const nameKey = (req) => `${String(req.body?.name || '').toLowerCase()}:${req.ip}`
+const ipKey = (req) => `ip:${req.ip}`
+
+function blockedFor(key, max, now) {
   const entry = loginAttempts.get(key)
-  const now = Date.now()
-  if (entry && now - entry.firstAt < LOGIN_WINDOW_MS && entry.count >= LOGIN_MAX_ATTEMPTS) {
-    const retryInMin = Math.ceil((LOGIN_WINDOW_MS - (now - entry.firstAt)) / 60000)
-    return res.status(429).json({ error: `Слишком много попыток. Попробуй через ${retryInMin} мин.` })
+  if (entry && now - entry.firstAt < LOGIN_WINDOW_MS && entry.count >= max) {
+    return Math.ceil((LOGIN_WINDOW_MS - (now - entry.firstAt)) / 60000)
   }
+  return 0
+}
+function loginRateLimit(req, res, next) {
+  const now = Date.now()
+  const retryInMin = blockedFor(nameKey(req), LOGIN_MAX_ATTEMPTS, now) || blockedFor(ipKey(req), IP_MAX_ATTEMPTS, now)
+  if (retryInMin) return res.status(429).json({ error: `Слишком много попыток. Попробуй через ${retryInMin} мин.` })
   next()
 }
-function registerFailedLogin(req) {
-  const key = `${(req.body?.name || '').toLowerCase()}:${req.ip}`
-  const now = Date.now()
+function bump(key, now) {
   const entry = loginAttempts.get(key)
-  if (!entry || now - entry.firstAt > LOGIN_WINDOW_MS) {
-    loginAttempts.set(key, { count: 1, firstAt: now })
-  } else {
-    entry.count++
-  }
+  if (!entry || now - entry.firstAt > LOGIN_WINDOW_MS) loginAttempts.set(key, { count: 1, firstAt: now })
+  else entry.count++
+}
+function registerFailedLogin(req) {
+  const now = Date.now()
+  bump(nameKey(req), now)
+  bump(ipKey(req), now)
 }
 function clearFailedLogins(req) {
-  loginAttempts.delete(`${(req.body?.name || '').toLowerCase()}:${req.ip}`)
+  // IP-счётчик не сбрасываем: удачный вход в свой аккаунт не должен «отмывать» перебор чужих
+  loginAttempts.delete(nameKey(req))
 }
+// Чистим устаревшие записи, чтобы Map не рос бесконечно
+setInterval(() => {
+  const now = Date.now()
+  for (const [k, v] of loginAttempts) if (now - v.firstAt > LOGIN_WINDOW_MS) loginAttempts.delete(k)
+}, LOGIN_WINDOW_MS).unref()
 
 module.exports = {
   signAccessToken, verifyAccessToken, issueRefreshToken,

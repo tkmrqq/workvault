@@ -75,6 +75,29 @@
       </div>
     </Transition>
 
+    <!-- Стикеры -->
+    <Transition name="slash-pop">
+      <div v-if="stickerOpen" class="sticker-panel" @click.stop>
+        <div class="sticker-head">
+          <span>Стикеры</span>
+          <label class="sticker-add" title="Добавить стикер (PNG/WebP/GIF до 1 МБ)">
+            <Plus :size="13" :stroke-width="2.5" /> {{ stickerUploading ? 'Загружаю…' : 'Добавить' }}
+            <input type="file" accept="image/png,image/webp,image/gif" @change="onStickerFile" :disabled="stickerUploading" />
+          </label>
+        </div>
+        <div v-if="!store.stickers.length" class="sticker-empty">Пока пусто — добавь первый стикер</div>
+        <div v-else class="sticker-grid">
+          <div v-for="st in store.stickers" :key="st.id" class="sticker-cell">
+            <button type="button" class="sticker-btn" :title="st.emoji || ''" @click="pickSticker(st)">
+              <img :src="resolveStickerUrl(st.url)" :alt="st.emoji || 'стикер'" loading="lazy" draggable="false" />
+            </button>
+            <button v-if="st.user_id === store.user?.id || store.user?.role === 'admin'" type="button"
+              class="sticker-del" title="Удалить из набора" @click="removeSticker(st)"><X :size="10" :stroke-width="3" /></button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
     <!-- Input row -->
     <div class="input-row">
       <label class="attach-btn" title="Прикрепить файл">
@@ -99,6 +122,10 @@
         @keyup="syncCaret"
         @paste="onPaste"
       />
+      <button type="button" class="sticker-toggle" :class="{ on: stickerOpen }" title="Стикеры"
+        :disabled="!store.activeChId" @click.stop="toggleStickers">
+        <Sticker :size="16" :stroke-width="2" />
+      </button>
       <button class="send-btn" :disabled="!canSend" @click="send">
         <Send :size="16" :stroke-width="2.5" />
       </button>
@@ -111,9 +138,10 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, watch } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
+import { getApiBase } from '@/lib/apiBase'
 import { useAppStore } from '@/stores/app'
-import { X, Paperclip, AlertTriangle, Send, FileArchive, FileText, File as FileIcon, Film, ListPlus, ListChecks } from 'lucide-vue-next'
+import { X, Paperclip, AlertTriangle, Send, FileArchive, FileText, File as FileIcon, Film, ListPlus, ListChecks, Sticker, Plus } from 'lucide-vue-next'
 
 const store      = useAppStore()
 // parentId задан — это поле ввода в панели треда, сообщения уходят ответами
@@ -123,6 +151,42 @@ const pendingFile = ref(null)
 const linkPreview = ref(null)
 const dragging    = ref(false)
 const fileError   = ref('')
+
+// ── Стикеры ──
+const stickerOpen = ref(false)
+const stickerUploading = ref(false)
+function resolveStickerUrl(u) {
+  if (!u) return ''
+  return /^https?:/.test(u) ? u : getApiBase() + u
+}
+async function toggleStickers() {
+  stickerOpen.value = !stickerOpen.value
+  if (stickerOpen.value) {
+    try { await store.loadStickers() } catch { showError('Не удалось загрузить стикеры') }
+  }
+}
+async function pickSticker(st) {
+  stickerOpen.value = false
+  try { await store.sendSticker(st, props.parentId) }
+  catch (e) { showError(e?.message || 'Не удалось отправить стикер') }
+}
+async function onStickerFile(e) {
+  const file = e.target.files?.[0]
+  e.target.value = ''
+  if (!file) return
+  if (file.size > 1024 * 1024) { showError('Стикер — максимум 1 МБ'); return }
+  stickerUploading.value = true
+  try { await store.uploadSticker(file) }
+  catch (err) { showError(err?.message || 'Не удалось загрузить стикер') }
+  finally { stickerUploading.value = false }
+}
+async function removeSticker(st) {
+  try { await store.deleteSticker(st.id) }
+  catch (err) { showError(err?.message || 'Не удалось удалить') }
+}
+function closeStickers() { stickerOpen.value = false }
+onMounted(() => document.addEventListener('click', closeStickers))
+onBeforeUnmount(() => document.removeEventListener('click', closeStickers))
 const taRef       = ref(null)
 const fileInput   = ref(null)
 const linkTimer   = ref(null)
@@ -477,6 +541,41 @@ async function runCommandAfterSend(cmd, ack, msgText) {
 </script>
 
 <style scoped>
+.sticker-toggle {
+  flex-shrink: 0; width: 34px; height: 34px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted, #8a8f98); background: transparent; border: none; cursor: pointer;
+}
+.sticker-toggle:hover, .sticker-toggle.on { color: var(--accent, #7c6af7); background: var(--surface-2, rgba(255,255,255,.05)); }
+.sticker-toggle:disabled { opacity: .4; cursor: default; }
+.sticker-panel {
+  position: absolute; right: 12px; bottom: calc(100% - 4px); z-index: 30;
+  width: min(340px, calc(100% - 24px)); max-height: 320px; display: flex; flex-direction: column;
+  background: var(--surface, #16161a); border: 1px solid var(--border, #2a2a30);
+  border-radius: 12px; box-shadow: var(--shadow-lg, 0 10px 30px rgba(0,0,0,.4)); overflow: hidden;
+}
+.sticker-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 10px; font-size: 12px; font-weight: 600; border-bottom: 1px solid var(--border, #2a2a30);
+}
+.sticker-add { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--accent, #7c6af7); font-weight: 500; }
+.sticker-add input { display: none; }
+.sticker-empty { padding: 24px 12px; text-align: center; font-size: 12px; color: var(--text-muted, #8a8f98); }
+.sticker-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 8px; overflow-y: auto; }
+.sticker-cell { position: relative; }
+.sticker-btn {
+  width: 100%; aspect-ratio: 1; padding: 4px; border: none; border-radius: 8px;
+  background: transparent; cursor: pointer;
+}
+.sticker-btn:hover { background: var(--surface-2, rgba(255,255,255,.06)); }
+.sticker-btn img { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.sticker-del {
+  position: absolute; top: 0; right: 0; width: 16px; height: 16px; border-radius: 50%;
+  display: none; align-items: center; justify-content: center; border: none; cursor: pointer;
+  background: var(--danger, #e5484d); color: #fff;
+}
+.sticker-cell:hover .sticker-del { display: flex; }
+
 .input-area {
   position: relative;
   border-top: 1px solid var(--divider);

@@ -923,9 +923,11 @@ async function saveSubtask() {
   await loadCard()
 }
 async function deleteSubtask() {
-  const r = await apiFetch(`${API}/api/kanban/subtasks/${subModal.id}`, { method: 'DELETE' })
+  const subId = subModal.id
+  const r = await apiFetch(`${API}/api/kanban/subtasks/${subId}`, { method: 'DELETE' })
   if (!r) return
   subModal.open = false
+  if (card.value?.subtasks) card.value = { ...card.value, subtasks: card.value.subtasks.filter(s => s.id !== subId) }
   await loadCard()
 }
 

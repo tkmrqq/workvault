@@ -45,7 +45,21 @@ if (COOKIE_SECURE && !APP_URL.startsWith('https')) {
   )
 }
 
+// ─── Безопасность ───────────────────────────────────────────
+// Дополнительные разрешённые Origin (через запятую), кроме APP_URL и vite dev
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || '').split(',').map(s => s.trim().replace(/\/$/, '')).filter(Boolean)
+// Electron, загруженный с file://, шлёт Origin: null — разрешаем, если не выключено
+const CORS_ALLOW_ELECTRON = process.env.CORS_ALLOW_ELECTRON !== 'false'
+// Открытая саморегистрация. Для закрытой команды лучше false + создание аккаунтов админом
+const ALLOW_REGISTRATION = process.env.ALLOW_REGISTRATION !== 'false'
+// Старый «задай пароль сам» для аккаунтов без пароля — дыра (захват чужого аккаунта).
+// Включать только временно на время миграции.
+const ALLOW_LEGACY_PASSWORD_SETUP = process.env.ALLOW_LEGACY_PASSWORD_SETUP === 'true'
+// Показывать список имён на экране входа без авторизации
+const PUBLIC_USER_LIST = process.env.PUBLIC_USER_LIST !== 'false'
+
 module.exports = {
+  CORS_ORIGINS, CORS_ALLOW_ELECTRON, ALLOW_REGISTRATION, ALLOW_LEGACY_PASSWORD_SETUP, PUBLIC_USER_LIST,
   PORT, HOST, APP_URL,
   UPLOADS_DIR, MAX_FILE_MB, MAX_FILE_BYTES,
   ADMIN_PASSWORD, KANBAN_ARCHIVE_AFTER_DAYS,

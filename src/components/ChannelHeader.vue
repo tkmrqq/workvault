@@ -3,15 +3,21 @@
     <div class="ch-header">
       <div class="ch-info">
         <MobileMenuButton />
-        <span class="ch-icon">{{ store.activeChannel?.icon || '#' }}</span>
-        <span class="ch-name">{{ store.activeChannel?.name || 'Выбери канал' }}</span>
+        <span class="ch-icon-box">{{ store.activeChannel?.icon || '#' }}</span>
+        <div class="ch-titles">
+          <span v-if="activeFolder" class="ch-folder">{{ activeFolder.icon }} {{ activeFolder.name }}</span>
+          <span class="ch-name" :title="store.activeChannel?.name">{{ store.activeChannel?.name || 'Выбери канал' }}</span>
+        </div>
       </div>
-      <div class="ch-users">
-        <div v-for="u in onlineHere" :key="u.userId" class="online-avatar"
-          :style="{ background: getUserColor(u) + '22', color: getUserColor(u) }"
-          :title="u.userName"
-        ><AvatarContent :value="store.usersById?.[u.userId]?.avatar || getUserAvatar(u)" :name="u.userName" /></div>
-        <span class="ch-count">{{ onlineHere.length }} онлайн</span>
+      <div v-if="store.activeChId" class="ch-users" :title="onlineHere.map(u => u.userName).join(', ')">
+        <div class="avatar-stack">
+          <div v-for="u in shownAvatars" :key="u.userId" class="online-avatar"
+            :style="{ background: getUserColor(u) + '22', color: getUserColor(u) }"
+            :title="u.userName"
+          ><AvatarContent :value="store.usersById?.[u.userId]?.avatar || getUserAvatar(u)" :name="u.userName" /></div>
+          <div v-if="extraCount" class="online-avatar more">+{{ extraCount }}</div>
+        </div>
+        <span class="ch-count"><span class="live-dot" />{{ onlineHere.length }} онлайн</span>
       </div>
     </div>
 
@@ -35,6 +41,12 @@ import { LayoutGrid, Image as ImageIcon, FileText, Link2 } from 'lucide-vue-next
 const store = useAppStore()
 const onlineHere = computed(() =>
   store.onlineList.filter(u => u.channelId === store.activeChId)
+)
+const MAX_AVATARS = 5
+const shownAvatars = computed(() => onlineHere.value.slice(0, MAX_AVATARS))
+const extraCount   = computed(() => Math.max(0, onlineHere.value.length - MAX_AVATARS))
+const activeFolder = computed(() =>
+  store.folders.find(f => (f.channels || []).some(c => c.id === store.activeChId)) || null
 )
 const filters = [
   { value: 'all',      icon: LayoutGrid, label: 'Все' },
@@ -76,15 +88,43 @@ function getUserAvatar(u) {
   background: var(--accent-soft); color: var(--accent);
   border-color: var(--accent-line);
 }
-.ch-info { display: flex; align-items: center; gap: var(--space-2); }
-.ch-icon { font-size: 1rem; }
-.ch-name { font-size: var(--text-base); font-weight: 700; }
-.ch-users { display: flex; align-items: center; gap: var(--space-2); }
+.ch-info { display: flex; align-items: center; gap: var(--space-2); min-width: 0; flex: 1; }
+.ch-icon-box {
+  width: 32px; height: 32px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 1rem; font-weight: 700;
+}
+.ch-titles { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.ch-folder {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ch-name {
+  font-size: var(--text-base); font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ch-users { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
+.avatar-stack { display: flex; align-items: center; padding-left: 6px; }
 .online-avatar {
   width: 28px; height: 28px; border-radius: var(--radius-full);
   display: flex; align-items: center; justify-content: center;
   font-size: .7rem; font-weight: 700;
   margin-left: -6px;
+  border: 2px solid var(--surface);
+  overflow: hidden;
 }
-.ch-count { font-size: var(--text-xs); color: var(--text-muted); margin-left: var(--space-2); }
+.online-avatar.more { background: var(--surface-3, var(--surface-2)); color: var(--text-muted); font-size: 10px; }
+.ch-count {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: var(--text-xs); color: var(--text-muted); margin-left: var(--space-1);
+  white-space: nowrap;
+}
+.live-dot { width: 6px; height: 6px; border-radius: var(--radius-full); background: var(--green); }
+@media (max-width: 860px) {
+  .ch-header { padding: 0 var(--space-3); }
+  .ch-filters { padding: 0 var(--space-3) var(--space-2); }
+  .avatar-stack { display: none; }
+}
 </style>

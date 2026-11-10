@@ -55,6 +55,15 @@
               <component :is="comp" :size="16" :stroke-width="2" />
             </button>
           </div>
+
+          <label v-if="!isEdit" class="ws-private">
+            <input type="checkbox" v-model="form.is_private" />
+            <span>
+              <b>Личное пространство</b>
+              <small>Видно только тебе. Задачи из чата сюда тоже можно скидывать — другие не увидят чип задачи.</small>
+            </span>
+          </label>
+          <div v-else-if="workspace?.is_private" class="ws-private-note">🔒 Личное пространство — видно только тебе</div>
         </div>
 
         <div class="modal-footer">
@@ -85,7 +94,7 @@ const nameRef = ref(null)
 
 function randomColor() { return WORKSPACE_COLORS[Math.floor(Math.random() * WORKSPACE_COLORS.length)] }
 
-const form = reactive({ name: '', icon: 'folder', color: randomColor() })
+const form = reactive({ name: '', icon: 'folder', color: randomColor(), is_private: false })
 
 // Каждое открытие модалки — сброс формы под текущий контекст (создание/правка)
 watch(() => props.open, async (isOpen) => {
@@ -98,6 +107,7 @@ watch(() => props.open, async (isOpen) => {
     form.name  = ''
     form.icon  = 'folder'
     form.color = randomColor()
+    form.is_private = false
   }
   await nextTick()
   nameRef.value?.focus()
@@ -111,7 +121,7 @@ async function save() {
   if (!form.name.trim() || saving.value) return
   saving.value = true
   try {
-    await Promise.resolve(emit('save', { name: form.name.trim(), icon: form.icon, color: form.color }))
+    await Promise.resolve(emit('save', { name: form.name.trim(), icon: form.icon, color: form.color, is_private: !isEdit.value && !!form.is_private }))
   } finally {
     saving.value = false
   }
@@ -119,6 +129,15 @@ async function save() {
 </script>
 
 <style scoped>
+.ws-private {
+  display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px; cursor: pointer;
+}
+.ws-private input { margin-top: 3px; accent-color: var(--accent, #7c6af7); }
+.ws-private span { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.ws-private small { color: var(--text-muted, #8a8f98); font-size: 11.5px; line-height: 1.35; }
+.ws-private-note { margin-top: 14px; font-size: 12px; color: var(--text-muted, #8a8f98); }
+
 /* Базовая "оболочка" модалки — как в KanbanCardView.vue (scoped-стили
    между компонентами не пересекаются, поэтому дублируем тут же) */
 .modal-overlay {

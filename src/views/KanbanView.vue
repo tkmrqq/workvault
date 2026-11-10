@@ -72,8 +72,9 @@
               <component :is="resolveWorkspaceIcon(ws.icon)" :size="12" :stroke-width="2.4" />
             </span>
             {{ ws.name }}
+            <Lock v-if="ws.is_private" class="ws-tab-lock" :size="10" :stroke-width="2.4" title="Личное пространство" />
             <Pencil class="ws-tab-edit" @click.stop="openEditWorkspace(ws)" :size="11" :stroke-width="2.2" />
-            <X v-if="workspaces.length > 1" class="ws-tab-del" @click.stop="removeWorkspace(ws)" :size="11" :stroke-width="2.5" />
+            <X v-if="ws.is_private || workspaces.filter(w => !w.is_private).length > 1" class="ws-tab-del" @click.stop="removeWorkspace(ws)" :size="11" :stroke-width="2.5" />
           </button>
           <button class="ws-tab ws-tab-add" @click="openCreateWorkspace" title="Новая рабочая зона"><Plus :size="13" :stroke-width="2.5" /></button>
         </div>
@@ -123,17 +124,7 @@
                   class="terminal-done-mark"
                   :class="{ 'terminal-new': uiPreferences.animationsEnabled && !!terminalFlashIds[card.id] }"
                   aria-hidden="true"
-                >
-                  <span class="terminal-done-badge">
-                    <svg viewBox="0 0 24 24" class="terminal-check-svg" width="15" height="15">
-                      <path
-                        :class="{ 'terminal-check-path': uiPreferences.animationsEnabled && !!terminalFlashIds[card.id] }"
-                        d="M5 13l4 4L19 7" fill="none" stroke="currentColor" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"
-                      />
-                    </svg>
-                    <span>Готово</span>
-                  </span>
-                </div>
+                ></div>
                   <div v-if="sortBy === 'manual' && !hasActiveFilters" class="card-drag-handle" title="Потяни, чтобы переместить">
                     <GripVertical :size="13" :stroke-width="2" />
                   </div>
@@ -162,10 +153,25 @@
                       <span class="assignee-name">{{ card.assignee_name }}</span>
                     </div>
                     <div v-else class="card-assignee-empty">Не назначено</div>
-                    <span v-if="card.source_message_id" class="card-source" title="Задача из чата">
-                      <MessageSquare :size="11" :stroke-width="2.4" />
-                      <span v-if="sourceChannelName(card)" class="card-source-ch">{{ sourceChannelName(card) }}</span>
-                    </span>
+                    <div class="card-badges">
+                      <span v-if="card.source_message_id" class="card-source" title="Задача из чата">
+                        <MessageSquare :size="11" :stroke-width="2.4" />
+                        <span v-if="sourceChannelName(card)" class="card-source-ch">{{ sourceChannelName(card) }}</span>
+                      </span>
+                      <span
+                        v-if="col.is_terminal"
+                        class="terminal-done-badge"
+                        :class="{ 'terminal-badge-new': uiPreferences.animationsEnabled && !!terminalFlashIds[card.id] }"
+                      >
+                        <svg viewBox="0 0 24 24" class="terminal-check-svg" width="13" height="13" aria-hidden="true">
+                          <path
+                            :class="{ 'terminal-check-path': uiPreferences.animationsEnabled && !!terminalFlashIds[card.id] }"
+                            d="M5 13l4 4L19 7" fill="none" stroke="currentColor" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"
+                          />
+                        </svg>
+                        <span>Готово</span>
+                      </span>
+                    </div>
                   </div>
               </div>
               </template>
@@ -360,7 +366,7 @@ import { resolveWorkspaceIcon } from '@/lib/workspaceIcons'
 import { getApiBase } from '@/lib/apiBase'
 import { uiPreferences } from '@/composables/useUiPreferences'
 import { useKanbanDrag } from '@/composables/useKanbanDrag'
-import {
+import { Lock,
   Archive, Plus, X, Check, Calendar, RotateCcw,
   LayoutDashboard, ArrowDown, ArrowRight, ArrowUp,
   ListChecks, Copy, Download, GripVertical, Pencil, ListFilter, ArrowDownWideNarrow, MessageSquare
@@ -673,8 +679,12 @@ async function saveCard() {
 
 async function deleteCard() {
   if (!await confirmDialog('Удалить задачу?', { danger: true, confirmLabel: 'Удалить' })) return
-  await fetch(`${API}/api/kanban/cards/${modal.id}`, { method: 'DELETE' })
+  const cardId = modal.id
+  const r = await fetch(`${API}/api/kanban/cards/${cardId}`, { method: 'DELETE' }).catch(() => null)
+  if (!r?.ok) { alert('Не удалось удалить задачу'); return }
   modal.open = false // напрямую — удаление уже подтверждено выше
+  // Убираем карточку сразу, не дожидаясь перезагрузки доски
+  board.value = (board.value || []).map(col => ({ ...col, cards: (col.cards || []).filter(c => c.id !== cardId) }))
   await loadBoard()
 }
 
@@ -833,7 +843,7 @@ function openEditWorkspace(ws) {
   wsModal.editing = ws
   wsModal.open = true
 }
-async function saveWorkspace({ name, icon, color }) {
+async function saveWorkspace({ name, icon, color, is_private }) {
   if (wsModal.editing) {
     await fetch(`${API}/api/kanban/workspaces/${wsModal.editing.id}`, {
       method: 'PATCH',
@@ -845,7 +855,7 @@ async function saveWorkspace({ name, icon, color }) {
     const r = await fetch(`${API}/api/kanban/workspaces`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, icon, color })
+      body: JSON.stringify({ name, icon, color, is_private: !!is_private })
     })
     const ws = await r.json()
     await loadWorkspaces()
@@ -871,6 +881,14 @@ async function loadBoard() {
   const generation = ++boardLoadGeneration
   const workspaceId = activeWorkspaceId.value
   const r = await fetch(`${API}/api/kanban?workspace_id=${workspaceId}`)
+  // Зону удалили или она чужая личная (сервер отвечает 404) — переключаемся на первую доступную
+  if (r.status === 404 || r.status === 403) {
+    if (generation !== boardLoadGeneration) return
+    await loadWorkspaces()
+    const first = workspaces.value[0]
+    if (first && first.id !== workspaceId) switchWorkspace(first.id)
+    return
+  }
   const nextBoard = await r.json()
   if (generation === boardLoadGeneration && !localReorderPending && workspaceId === activeWorkspaceId.value) board.value = nextBoard
 }
@@ -932,6 +950,8 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.ws-tab-lock { opacity: .7; margin-left: -2px; }
+
 .kanban-root {
   display: flex; flex-direction: column;
   height: 100dvh; overflow: hidden;
@@ -1296,23 +1316,23 @@ onUnmounted(() => {
   animation: terminalOverlayIn .72s ease both, terminalOutlinePulse .85s ease both;
 }
 .terminal-done-badge {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
+  /* Раньше бейдж был position:absolute в правом нижнем углу и перекрывал
+     ярлык «из чата» (он тоже прижат вправо через margin-left:auto).
+     Теперь оба живут в одном flex-ряду .card-badges и не наезжают. */
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 8px 4px 5px;
+  flex-shrink: 0;
+  gap: 4px;
+  padding: 2px 7px 2px 5px;
   border: 1px solid color-mix(in srgb, var(--green) 25%, var(--border));
   border-radius: 999px;
   background: var(--surface);
   color: var(--green);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, .12);
   font-size: 10px;
   font-weight: 700;
-  line-height: 1;
+  line-height: 1.2;
 }
-.terminal-new .terminal-done-badge {
+.terminal-done-badge.terminal-badge-new {
   animation: terminalBadgeIn .52s cubic-bezier(.2,.8,.2,1) both;
 }
 @keyframes terminalOverlayIn {
@@ -1340,17 +1360,33 @@ onUnmounted(() => {
 }
 .card-progress-label { font-size: 10px; font-weight: 700; color: var(--text-faint); }
 
-.card-footer { margin-top: 8px; display: flex; align-items: center; gap: 6px; }
+/* Бейджи «из чата» и «Готово»: ярлык чата сжимался (min-width:0), но без
+   overflow:hidden его иконка/текст вылезали поверх соседнего «Готово».
+   Теперь ярлык обрезается внутри себя, «Готово» не сжимается, а при нехватке
+   места весь блок бейджей уходит на новую строку, а не наезжает. */
+.card-footer {
+  margin-top: 8px; display: flex; align-items: center; gap: 6px;
+  flex-wrap: wrap; row-gap: 6px;
+  position: relative; z-index: 4; /* выше оверлея .terminal-done-mark */
+}
+.card-badges {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 4px;
+  min-width: 0; max-width: 100%; flex-wrap: nowrap; justify-content: flex-end;
+}
 .card-source {
-  margin-left: auto; display: inline-flex; align-items: center; gap: 3px;
+  display: inline-flex; min-width: 0; align-items: center; gap: 3px;
   max-width: 120px; padding: 1px 7px; border-radius: 999px;
   background: var(--accent-soft); color: var(--accent);
-  font-size: 10.5px; font-weight: 600;
+  font-size: 10.5px; font-weight: 600; line-height: 1.4;
+  overflow: hidden; white-space: nowrap; flex: 0 1 auto;
 }
-.card-source-ch { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-source > svg { flex-shrink: 0; }
+.card-source-ch { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-badges .terminal-done-badge { flex: 0 0 auto; white-space: nowrap; }
 .card-assignee {
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 1 auto;
 }
+.card-assignee .assignee-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .assignee-avatar {
   width: 22px; height: 22px; border-radius: 50%;
   font-size: .85rem;

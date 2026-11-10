@@ -94,6 +94,7 @@ jobs:
           JWT_ACCESS_EXPIRES_IN=15m
           JWT_REFRESH_EXPIRES_IN=30d
           COOKIE_SECURE=true
+          
           EOF
       
       - name: Deploy WorkVault
