@@ -295,6 +295,10 @@ export const useAppStore = defineStore('app', () => {
       _patchMessage(messageId, m => ({ ...m, reactions }))
     })
 
+    socket.on('poll:update', ({ messageId, poll }) => {
+      _patchMessage(messageId, m => ({ ...m, poll }))
+    })
+
     // Задача, привязанная к сообщению, создана / переехала в другую колонку /
     // ушла в архив / удалена (task === null)
     socket.on('message:task', ({ messageId, task }) => {
@@ -447,7 +451,7 @@ export const useAppStore = defineStore('app', () => {
   // "выстрелил и забыл": если сервер не смог сохранить сообщение (протухшая
   // сессия, невалидный channelId и т.п.), фронт об этом никак не узнавал —
   // текст уже очищался в MessageInput, и сообщение просто исчезало без следа.
-  async function sendMessage({ text, attachment, linkMeta, parentId = null }) {
+  async function sendMessage({ text, attachment, linkMeta, parentId = null, poll = null }) {
     if (!activeChId.value || !user.value) throw new Error('Нет активного канала')
     if (!socket?.connected) throw new Error('Нет соединения с сервером — сообщение не отправлено')
     return new Promise((resolve, reject) => {
@@ -456,7 +460,8 @@ export const useAppStore = defineStore('app', () => {
         text:       text || null,
         attachment: attachment || null,
         linkMeta:   linkMeta || null,
-        parentId:   parentId || null
+        parentId:   parentId || null,
+        poll:       poll || null
       }, (err, ack) => {
         // err — таймаут/дисконнект самого socket.io (см. .timeout() выше)
         if (err) return reject(new Error('Сервер не ответил — проверь соединение'))
@@ -495,6 +500,10 @@ export const useAppStore = defineStore('app', () => {
       messageId,
       channelId: activeChId.value
     })
+  }
+
+  function votePoll(messageId, option) {
+    socket?.emit('poll:vote', { messageId, option })
   }
 
   function toggleReaction(messageId, emoji) {
@@ -555,7 +564,7 @@ export const useAppStore = defineStore('app', () => {
     fetchUsers, checkSession, register, login, setPassword, logout, toggleTheme, getSocket,
     fetchFolders, setChannel, loadMore,
     sendMessage, uploadFile, unfurlUrl,
-    editMessage, deleteMessage, toggleReaction, sendTyping,
+    editMessage, deleteMessage, toggleReaction, votePoll, sendTyping,
     isMessageEntering,
     createTaskFromMessage, focusTarget, jumpToMessage, flashMsgId, flashMessage,
     threadParentId, threadParent, threadReplies, threadLoading, threadFocusId, openThread, closeThread

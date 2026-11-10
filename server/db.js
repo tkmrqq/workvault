@@ -190,6 +190,20 @@ for (const col of ['title TEXT', 'timezone TEXT', 'status_emoji TEXT', 'status_t
 try { db.prepare('ALTER TABLE messages ADD COLUMN parent_id INTEGER REFERENCES messages(id) ON DELETE CASCADE').run() } catch { }
 try { db.prepare('CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_id)').run() } catch { }
 
+// Опросы: варианты лежат JSON-ом в messages.poll ({ options: [...], multi }),
+// голоса — отдельной таблицей (option = индекс варианта)
+try { db.prepare('ALTER TABLE messages ADD COLUMN poll TEXT').run() } catch { }
+db.exec(`
+  CREATE TABLE IF NOT EXISTS poll_votes (
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    option     INTEGER NOT NULL,
+    created_at INTEGER DEFAULT (unixepoch()),
+    UNIQUE(message_id, user_id, option)
+  );
+  CREATE INDEX IF NOT EXISTS idx_poll_votes_msg ON poll_votes(message_id);
+`)
+
 // Дефолтная рабочая зона + привязка "старых" колонок без workspace_id
 const wsCount = db.prepare('SELECT COUNT(*) as c FROM kanban_workspaces').get().c
 if (wsCount === 0) {
@@ -387,11 +401,37 @@ function threadMeta(messageId) {
   return { reply_count: agg.c, last_reply_at: agg.last, reply_users: users }
 }
 
+// Опрос для фронта: варианты + кто за какой проголосовал
+function pollFor(messageId, raw) {
+  let p
+  try { p = typeof raw === 'string' ? JSON.parse(raw) : raw } catch { return null }
+  if (!p?.options?.length) return null
+  const votes = db.prepare('SELECT option, user_id FROM poll_votes WHERE message_id = ? ORDER BY created_at').all(messageId)
+  return {
+    multi: !!p.multi,
+    options: p.options.map((text, i) => ({ text, user_ids: votes.filter(v => v.option === i).map(v => v.user_id) }))
+  }
+}
+
+// Клик по варианту: повторный клик снимает голос; в обычном опросе
+// новый выбор заменяет старый, в multi — добавляется к нему
+const votePoll = db.transaction((messageId, userId, option, multi) => {
+  const had = db.prepare('SELECT 1 FROM poll_votes WHERE message_id = ? AND user_id = ? AND option = ?').get(messageId, userId, option)
+  if (multi) {
+    if (had) db.prepare('DELETE FROM poll_votes WHERE message_id = ? AND user_id = ? AND option = ?').run(messageId, userId, option)
+    else db.prepare('INSERT INTO poll_votes (message_id, user_id, option) VALUES (?,?,?)').run(messageId, userId, option)
+  } else {
+    db.prepare('DELETE FROM poll_votes WHERE message_id = ? AND user_id = ?').run(messageId, userId)
+    if (!had) db.prepare('INSERT INTO poll_votes (message_id, user_id, option) VALUES (?,?,?)').run(messageId, userId, option)
+  }
+})
+
 function parseMessageRow(row) {
   return {
     ...row,
     attachment: row.attachment ? JSON.parse(row.attachment) : null,
     link_meta: row.link_meta ? JSON.parse(row.link_meta) : null,
+    poll: row.poll ? pollFor(row.id, row.poll) : null,
     task: taskForMessage(row.id),
     ...(row.parent_id ? {} : threadMeta(row.id)),
     reactions: []  // реакции подтягиваются отдельно в server.js
@@ -485,6 +525,9 @@ function getUserStats(id) {
 
 module.exports = {
   getUserStats,
+  pollFor,
+  votePoll,
+  setMessagePoll: (id, json) => db.prepare('UPDATE messages SET poll = ? WHERE id = ?').run(json, id),
   taskForMessage,
   messageSnapshot,
   setCardSourceSnapshot,

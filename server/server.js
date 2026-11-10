@@ -598,7 +598,7 @@ io.on('connection', (socket) => {
   // на клиенте). Так фронт узнаёт результат отправки напрямую по этому конкретному
   // сообщению, а не гадает по общему socket.on('error') (который раньше вообще
   // никто не слушал — сообщение просто пропадало без следа при любой ошибке).
-  socket.on('message:send', ({ channelId, text, attachment, linkMeta, parentId }, ack) => {
+  socket.on('message:send', ({ channelId, text, attachment, linkMeta, parentId, poll }, ack) => {
     try {
       // Ответ в треде: корень должен быть в том же канале; ответ на ответ
       // поднимаем до корня — треды плоские
@@ -611,13 +611,25 @@ io.on('connection', (socket) => {
           return
         }
       }
-      const type = attachment ? (attachment.isImage ? 'image' : 'file') : 'text'
+      // Опрос: текст сообщения = вопрос, от 2 до 10 уникальных вариантов, без файлов
+      let pollJson = null
+      if (poll) {
+        const options = [...new Set((Array.isArray(poll.options) ? poll.options : [])
+          .map(o => String(o ?? '').trim().slice(0, 100)).filter(Boolean))]
+        if (!String(text || '').trim() || attachment || options.length < 2 || options.length > 10) {
+          ack?.({ ok: false, error: 'Опросу нужен вопрос и от 2 до 10 вариантов' })
+          return
+        }
+        pollJson = JSON.stringify({ options, multi: !!poll.multi })
+      }
+      const type = pollJson ? 'poll' : attachment ? (attachment.isImage ? 'image' : 'file') : 'text'
       const result = db.createMessage(
         channelId, socket.user.id, text || null, type,
         attachment ? JSON.stringify(attachment) : null,
         linkMeta ? JSON.stringify(linkMeta) : null,
         parent?.id || null
       )
+      if (pollJson) db.setMessagePoll(result.lastInsertRowid, pollJson)
       const msg = db.getMessageFull(result.lastInsertRowid)
       if (!msg) {
         ack?.({ ok: false, error: 'Сообщение не найдено после сохранения' })
@@ -658,6 +670,21 @@ io.on('connection', (socket) => {
     db.toggleReaction(messageId, socket.user.id, emoji)
     const reactions = db.getReactions(messageId)
     io.to(`channel:${channelId}`).emit('reaction:update', { messageId, reactions })
+  })
+
+  // Голос в опросе. Канал берём из самого сообщения, а не с клиента
+  socket.on('poll:vote', ({ messageId, option }) => {
+    try {
+      const m = db.getMessageById(Number(messageId))
+      if (!m?.poll) return
+      const p = JSON.parse(m.poll)
+      const i = Number(option)
+      if (!Number.isInteger(i) || i < 0 || i >= p.options.length) return
+      db.votePoll(m.id, socket.user.id, i, !!p.multi)
+      io.to(`channel:${m.channel_id}`).emit('poll:update', { messageId: m.id, poll: db.pollFor(m.id, m.poll) })
+    } catch (e) {
+      console.error('poll:vote error:', e)
+    }
   })
 
   socket.on('typing:start', ({ channelId }) => {

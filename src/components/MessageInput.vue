@@ -46,7 +46,14 @@
       <div v-if="commandMatch" class="cmd-badge">
         <component :is="commandMatch.cmd.icon" :size="13" :stroke-width="2.2" />
         <span>{{ commandMatch.cmd.badge }}</span>
-        <span v-if="!commandMatch.arg && !pendingFile" class="cmd-warn">— добавь название</span>
+        <template v-if="commandMatch.cmd.name === 'poll'">
+          <span class="cmd-warn">{{ pollDraft.question
+            ? `· вариантов: ${pollDraft.options.length}${pollDraft.options.length < 2 ? ' (нужно ≥ 2)' : ''}`
+            : '— вопрос, дальше варианты с новой строки (Shift+Enter) или через |' }}</span>
+          <button type="button" class="cmd-toggle" :class="{ on: pollMulti }" :aria-pressed="pollMulti"
+            @mousedown.prevent="pollMulti = !pollMulti">несколько ответов</button>
+        </template>
+        <span v-else-if="!commandMatch.arg && !pendingFile" class="cmd-warn">— добавь название</span>
       </div>
     </Transition>
 
@@ -106,7 +113,7 @@
 <script setup>
 import { ref, computed, nextTick, watch } from 'vue'
 import { useAppStore } from '@/stores/app'
-import { X, Paperclip, AlertTriangle, Send, FileArchive, FileText, File as FileIcon, Film, ListPlus } from 'lucide-vue-next'
+import { X, Paperclip, AlertTriangle, Send, FileArchive, FileText, File as FileIcon, Film, ListPlus, ListChecks } from 'lucide-vue-next'
 
 const store      = useAppStore()
 // parentId задан — это поле ввода в панели треда, сообщения уходят ответами
@@ -134,8 +141,23 @@ const COMMANDS = [
     desc:  'Отправить и сразу создать задачу на канбане',
     badge: 'Сообщение станет задачей на канбане',
     icon:  ListPlus
+  },
+  {
+    name:  'poll',
+    hint:  '<вопрос> ↵ <варианты>',
+    desc:  'Создать опрос',
+    badge: 'Опрос',
+    icon:  ListChecks
   }
 ]
+
+// Опрос: первая строка — вопрос, остальные — варианты. В одну строку можно через |
+function parsePoll(arg) {
+  const src = arg || ''
+  const parts = (src.includes('\n') ? src.split('\n') : src.split('|')).map(s => s.trim()).filter(Boolean)
+  return { question: parts[0] || '', options: [...new Set(parts.slice(1))] }
+}
+const pollMulti = ref(false)
 
 const slashIndex     = ref(0)
 const slashDismissed = ref(false)
@@ -203,6 +225,7 @@ const commandMatch = computed(() => {
   const cmd = COMMANDS.find(c => c.name === m[1].toLowerCase())
   return cmd ? { cmd, arg: m[2].trim() } : null
 })
+const pollDraft = computed(() => parsePoll(commandMatch.value?.cmd.name === 'poll' ? commandMatch.value.arg : ''))
 
 function applyCommand(c) {
   if (!c) return
@@ -383,7 +406,19 @@ async function send() {
   const rawText = text.value
   const cmd     = commandMatch.value
   // Для /task в чат уходит только само название, без префикса
-  const msgText = cmd ? cmd.arg : text.value.trim()
+  let msgText = cmd ? cmd.arg : text.value.trim()
+  let poll = null
+  if (cmd?.cmd.name === 'poll') {
+    const d = parsePoll(cmd.arg)
+    if (pendingFile.value) { showError('К опросу нельзя прикрепить файл'); return }
+    if (!d.question || d.options.length < 2) {
+      showError('Опрос: вопрос и минимум 2 варианта — каждый с новой строки (Shift+Enter) или через |', 6000)
+      return
+    }
+    if (d.options.length > 10) { showError('Максимум 10 вариантов'); return }
+    msgText = d.question
+    poll = { options: d.options, multi: pollMulti.value }
+  }
   if (cmd && !msgText && !pendingFile.value) {
     showError('Добавь название: /task Купить домен')
     return
@@ -414,7 +449,8 @@ async function send() {
 
   let ack
   try {
-    ack = await store.sendMessage({ text: msgText || null, attachment, linkMeta: meta, parentId: props.parentId })
+    ack = await store.sendMessage({ text: msgText || null, attachment, linkMeta: meta, parentId: props.parentId, poll })
+    if (poll) pollMulti.value = false
   } catch (e) {
     // Сообщение реально не сохранилось на сервере — не даём тексту молча
     // пропасть: возвращаем его в поле и показываем причину
@@ -567,6 +603,13 @@ async function runCommandAfterSend(cmd, ack, msgText) {
   font-size: var(--text-xs); font-weight: 600;
 }
 .cmd-warn { color: var(--text-muted); font-weight: 400; }
+.cmd-toggle {
+  margin-left: 4px; padding: 1px 8px;
+  border-radius: 999px; border: 1px solid color-mix(in oklab, var(--accent) 40%, transparent);
+  color: var(--accent); font-size: inherit; font-weight: 500;
+  transition: background .15s ease, color .15s ease;
+}
+.cmd-toggle.on { background: var(--accent); color: #fff; }
 
 .slash-pop-enter-active { transition: opacity var(--dur-fast, .15s) var(--ease-out, ease), transform var(--dur, .25s) var(--ease-spring, ease); }
 .slash-pop-leave-active { transition: opacity var(--dur-fast, .15s) ease, transform var(--dur-fast, .15s) ease; }

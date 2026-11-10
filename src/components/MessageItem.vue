@@ -30,6 +30,29 @@
         </div>
       </div>
 
+      <!-- Poll -->
+      <div v-if="msg.poll" class="poll">
+        <div class="poll-meta">
+          <ListChecks :size="13" :stroke-width="2.2" />
+          Опрос · {{ msg.poll.multi ? 'можно несколько ответов' : 'один ответ' }}
+        </div>
+        <button v-for="(o, i) in msg.poll.options" :key="i" type="button" class="poll-opt"
+          :class="{ mine: o.user_ids.includes(store.user?.id) }"
+          :title="o.user_ids.length ? pollVoters(o) : 'Пока никто'"
+          :aria-pressed="o.user_ids.includes(store.user?.id)"
+          @click="store.votePoll(msg.id, i)">
+          <span class="po-fill" :style="{ transform: `scaleX(${pollPct(o) / 100})` }" />
+          <span class="po-check" :class="{ square: msg.poll.multi }">
+            <Check v-if="o.user_ids.includes(store.user?.id)" :size="11" :stroke-width="3" />
+          </span>
+          <span class="po-text">{{ o.text }}</span>
+          <span class="po-pct">{{ pollPct(o) }}%</span>
+        </button>
+        <div class="poll-foot">
+          {{ pollTotal }} {{ votesWord(pollTotal) }}{{ pollMine ? ' · нажми ещё раз, чтобы снять голос' : '' }}
+        </div>
+      </div>
+
       <!-- Image -->
       <div v-if="msg.attachment?.isImage" class="msg-img-wrap">
         <img :src="attachUrl" :alt="msg.attachment.name" class="msg-img" loading="lazy"
@@ -191,6 +214,23 @@ function resolveUrl(url) {
 
 const attachUrl = computed(() => resolveUrl(props.msg.attachment?.url))
 const isOwn     = computed(() => props.msg.user_id === store.user?.id)
+
+// ── Опрос ── (процент — от числа проголосовавших людей, как в Телеграме)
+const pollTotal = computed(() => {
+  const s = new Set()
+  for (const o of props.msg.poll?.options || []) o.user_ids.forEach(id => s.add(id))
+  return s.size
+})
+const pollMine = computed(() => (props.msg.poll?.options || []).some(o => o.user_ids.includes(store.user?.id)))
+function pollPct(o) { return pollTotal.value ? Math.round(o.user_ids.length / pollTotal.value * 100) : 0 }
+function pollVoters(o) { return o.user_ids.map(id => store.usersById?.[id]?.name || 'кто-то').join(', ') }
+function votesWord(n) {
+  const a = n % 100, b = n % 10
+  if (a > 10 && a < 20) return 'голосов'
+  if (b === 1) return 'голос'
+  if (b > 1 && b < 5) return 'голоса'
+  return 'голосов'
+}
 const authorStatus = computed(() => {
   const u = store.usersById?.[props.msg.user_id]
   return store.statusActive(u) ? { emoji: u.status_emoji, text: u.status_text || '' } : null
@@ -499,6 +539,51 @@ function onContextMenu(e) {
 .msg-status { font-size: 13px; line-height: 1; cursor: default; }
 
 .msg-text { font-size: var(--text-sm); line-height: 1.6; color: var(--text); word-break: break-word; }
+
+/* Опрос */
+.poll {
+  max-width: 420px; margin-top: 6px; padding: 10px;
+  display: flex; flex-direction: column; gap: 6px;
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--surface-2);
+}
+.poll-meta {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--text-faint);
+}
+.poll-opt {
+  position: relative; overflow: hidden;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text); font-size: var(--text-sm); text-align: left;
+  cursor: pointer;
+  transition: border-color .15s ease;
+}
+.poll-opt:hover { border-color: color-mix(in oklab, var(--accent) 50%, var(--border)); }
+.poll-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.po-fill {
+  position: absolute; inset: 0;
+  transform-origin: left; pointer-events: none;
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
+  transition: transform .45s var(--ease-out, ease);
+}
+.poll-opt.mine .po-fill { background: color-mix(in oklab, var(--accent) 28%, transparent); }
+.po-check {
+  position: relative; flex: none;
+  width: 16px; height: 16px;
+  display: grid; place-items: center;
+  border: 1.5px solid var(--text-faint); border-radius: 50%;
+  color: #fff;
+}
+.po-check.square { border-radius: 4px; }
+.poll-opt.mine .po-check { background: var(--accent); border-color: var(--accent); }
+.po-text { position: relative; flex: 1; min-width: 0; word-break: break-word; }
+.po-pct { position: relative; flex: none; font-size: 12px; font-weight: 600; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.poll-foot { font-size: 11px; color: var(--text-faint); }
+@media (prefers-reduced-motion: reduce) { .po-fill { transition: none; } }
 .msg-text :deep(code) {
   font-family: var(--font-mono, monospace); font-size: .85em;
   background: var(--surface-3); padding: 1px 5px;
