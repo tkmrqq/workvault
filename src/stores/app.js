@@ -40,6 +40,9 @@ export const useAppStore = defineStore('app', () => {
   const hasMore     = ref({})
   const onlineList  = ref([])
   const typingMap   = ref({})
+  // Непрочитанные по каналам: { [channelId]: count }. Сокет-комнаты есть только
+  // у активного канала, поэтому сервер шлёт всем лёгкое channel:activity.
+  const unread      = ref({})
   // Переход «к исходному сообщению» из карточки: MessageList ждёт, пока канал
   // загрузится, скроллит к сообщению и подсвечивает его (flashMsgId)
   const focusTarget = ref(null) // { channelId, messageId, replyId? }
@@ -265,6 +268,7 @@ export const useAppStore = defineStore('app', () => {
     })
 
     socket.on('online:update', list => { onlineList.value = list })
+    socket.on('stickers:update', () => { if (stickersLoaded) loadStickers(true) })
 
     socket.on('message:new', msg => { _pushMessage(msg) })
 
@@ -290,6 +294,11 @@ export const useAppStore = defineStore('app', () => {
     })
 
     socket.on('message:deleted', ({ messageId }) => { _removeMessage(messageId) })
+
+    socket.on('channel:activity', ({ channelId, userId } = {}) => {
+      if (!channelId || userId === user.value?.id || channelId === activeChId.value) return
+      unread.value = { ...unread.value, [channelId]: (unread.value[channelId] || 0) + 1 }
+    })
 
     socket.on('reaction:update', ({ messageId, reactions }) => {
       _patchMessage(messageId, m => ({ ...m, reactions }))
@@ -421,6 +430,10 @@ export const useAppStore = defineStore('app', () => {
   async function setChannel(chId) {
     if (threadParentId.value && chId !== activeChId.value) closeThread()
     activeChId.value = chId
+    if (unread.value[chId]) {
+      const { [chId]: _, ...rest } = unread.value
+      unread.value = rest
+    }
     socket?.emit('channel:join', { channelId: chId })
     if (!messages.value[chId]) {
       const res = await fetch(`${API}/api/messages/${chId}`)
@@ -451,7 +464,7 @@ export const useAppStore = defineStore('app', () => {
   // "выстрелил и забыл": если сервер не смог сохранить сообщение (протухшая
   // сессия, невалидный channelId и т.п.), фронт об этом никак не узнавал —
   // текст уже очищался в MessageInput, и сообщение просто исчезало без следа.
-  async function sendMessage({ text, attachment, linkMeta, parentId = null, poll = null }) {
+  async function sendMessage({ text, attachment, linkMeta, parentId = null, poll = null, stickerId = null }) {
     if (!activeChId.value || !user.value) throw new Error('Нет активного канала')
     if (!socket?.connected) throw new Error('Нет соединения с сервером — сообщение не отправлено')
     return new Promise((resolve, reject) => {
@@ -461,7 +474,8 @@ export const useAppStore = defineStore('app', () => {
         attachment: attachment || null,
         linkMeta:   linkMeta || null,
         parentId:   parentId || null,
-        poll:       poll || null
+        poll:       poll || null,
+        stickerId:  stickerId ?? null
       }, (err, ack) => {
         // err — таймаут/дисконнект самого socket.io (см. .timeout() выше)
         if (err) return reject(new Error('Сервер не ответил — проверь соединение'))
@@ -469,6 +483,36 @@ export const useAppStore = defineStore('app', () => {
         resolve(ack)
       })
     })
+  }
+
+  // ─── Стикеры ──────────────────────────────────────────────
+  const stickers = ref([])
+  let stickersLoaded = false
+  async function loadStickers(force = false) {
+    if (stickersLoaded && !force) return stickers.value
+    const res = await fetch(`${API}/api/stickers`, { credentials: 'include' })
+    if (res.ok) { stickers.value = await res.json(); stickersLoaded = true }
+    return stickers.value
+  }
+  async function uploadSticker(file, emoji = '') {
+    const fd = new FormData()
+    fd.append('file', file)
+    if (emoji) fd.append('emoji', emoji)
+    const res = await fetch(`${API}/api/stickers`, { method: 'POST', body: fd, credentials: 'include' })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Не удалось загрузить стикер')
+    await loadStickers(true)
+    return data
+  }
+  async function deleteSticker(id) {
+    const res = await fetch(`${API}/api/stickers/${id}`, { method: 'DELETE', credentials: 'include' })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Не удалось удалить стикер')
+    stickers.value = stickers.value.filter(s => s.id !== id) // сразу из UI
+    await loadStickers(true)
+  }
+  function sendSticker(sticker, parentId = null) {
+    return sendMessage({ stickerId: sticker.id, parentId })
   }
 
   async function uploadFile(file) {
@@ -495,10 +539,19 @@ export const useAppStore = defineStore('app', () => {
     })
   }
 
+  // Убираем сообщение локально сразу по ack — не ждём эха message:deleted
+  // из комнаты канала (его может не быть, если сокет переподключился и ещё
+  // не вернулся в комнату, или сообщение открыто в треде другого канала)
   function deleteMessage(messageId) {
-    socket?.emit('message:delete', {
-      messageId,
-      channelId: activeChId.value
+    if (!socket?.connected) return Promise.resolve(false)
+    return new Promise(resolve => {
+      socket.timeout(8000).emit('message:delete', {
+        messageId,
+        channelId: activeChId.value
+      }, (err, ack) => {
+        if (!err && ack?.ok) { _removeMessage(messageId); resolve(true) }
+        else resolve(false)
+      })
     })
   }
 
@@ -556,6 +609,7 @@ export const useAppStore = defineStore('app', () => {
   // sessionChecked), а не сразу здесь — иначе будет гонка с установкой роутов
 
   return {
+    stickers, loadStickers, uploadSticker, deleteSticker, sendSticker,
     users, loadUsers, mentionRegex, myMentionName, mentionsMe,
     usersById, statusActive, myStatusLine, composerInsert, insertIntoComposer,
     user, sessionChecked, theme, folders, activeChId, activeChannel, allChannels,
@@ -564,6 +618,7 @@ export const useAppStore = defineStore('app', () => {
     fetchUsers, checkSession, register, login, setPassword, logout, toggleTheme, getSocket,
     fetchFolders, setChannel, loadMore,
     sendMessage, uploadFile, unfurlUrl,
+    unread,
     editMessage, deleteMessage, toggleReaction, votePoll, sendTyping,
     isMessageEntering,
     createTaskFromMessage, focusTarget, jumpToMessage, flashMsgId, flashMessage,

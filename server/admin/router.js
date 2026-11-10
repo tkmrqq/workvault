@@ -81,33 +81,74 @@ module.exports = function createAdminRouter(io) {
       db.logAdmin('clear-history', { channelId: req.params.channelId, deleted: result.changes })
       res.json({ ok: true, deleted: result.changes })
     } catch (e) {
-      res.status(500).json({ error: e.message })
+      res.status(500).json({ error: 'Внутренняя ошибка сервера' })
     }
   })
 
+  // Раньше: удалялись только сообщения + пользователь, но его access-токен жил ещё
+  // 15 минут, refresh — до 30 дней, а реакции/голоса оставались сиротами.
   router.post('/api/delete-user/:id', requireAdmin, (req, res) => {
+    const id = Number(req.params.id)
+    if (id === req.user.id) return res.status(400).json({ error: 'Нельзя удалить самого себя' })
     try {
-      db.db.prepare('DELETE FROM messages WHERE user_id = ?').run(req.params.id)
-      db.db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id)
-      db.logAdmin('delete-user', { userId: req.params.id })
+      db.db.transaction(() => {
+        db.revokeUserSessions(id)
+        const mine = 'SELECT id FROM messages WHERE user_id = ?'
+        db.db.prepare(`DELETE FROM reactions WHERE user_id = ? OR message_id IN (${mine})`).run(id, id)
+        db.db.prepare(`DELETE FROM poll_votes WHERE user_id = ? OR message_id IN (${mine})`).run(id, id)
+        db.db.prepare(`UPDATE messages SET parent_id = NULL WHERE parent_id IN (${mine})`).run(id)
+        db.db.prepare('DELETE FROM messages WHERE user_id = ?').run(id)
+        db.db.prepare('DELETE FROM users WHERE id = ?').run(id)
+      })()
+      db.logAdmin('delete-user', { userId: id, by: req.user.id })
+      io.in(`user:${id}`).disconnectSockets(true)
       res.json({ ok: true })
     } catch (e) {
-      res.status(500).json({ error: e.message })
+      console.error('delete-user error:', e)
+      res.status(500).json({ error: 'Внутренняя ошибка сервера' })
     }
   })
 
   router.post('/api/set-role/:id', requireAdmin, (req, res) => {
-    const { role } = req.body
+    const { role } = req.body || {}
     if (!['member', 'admin'].includes(role)) return res.status(400).json({ error: 'Недопустимая роль' })
     if (Number(req.params.id) === req.user.id && role !== 'admin') {
       return res.status(400).json({ error: 'Нельзя снять права администратора с самого себя' })
     }
     try {
       db.setUserRole(req.params.id, role)
-      db.logAdmin('set-role', { userId: req.params.id, role })
+      // Роль зашита в JWT: без отзыва сессий снятый админ оставался бы админом
+      // до истечения access-токена. Заставляем перелогиниться.
+      if (Number(req.params.id) !== req.user.id) {
+        db.revokeUserSessions(Number(req.params.id))
+        io.in(`user:${Number(req.params.id)}`).disconnectSockets(true)
+      }
+      db.logAdmin('set-role', { userId: req.params.id, role, by: req.user.id })
       res.json({ ok: true })
     } catch (e) {
-      res.status(500).json({ error: e.message })
+      console.error('set-role error:', e)
+      res.status(500).json({ error: 'Внутренняя ошибка сервера' })
+    }
+  })
+
+  // Замена дырявому /api/auth/set-password: пароль задаёт/сбрасывает админ
+  router.post('/api/reset-password/:id', requireAdmin, (req, res) => {
+    const id = Number(req.params.id)
+    const password = String(req.body?.password || '')
+    if (password.length < 8) return res.status(400).json({ error: 'Пароль — минимум 8 символов' })
+    if (password.length > 200) return res.status(400).json({ error: 'Слишком длинный пароль' })
+    if (!db.getUserById(id)) return res.status(404).json({ error: 'Пользователь не найден' })
+    try {
+      db.setUserPassword(id, password)
+      if (id !== req.user.id) {
+        db.revokeUserSessions(id)
+        io.in(`user:${id}`).disconnectSockets(true)
+      }
+      db.logAdmin('reset-password', { userId: id, by: req.user.id })
+      res.json({ ok: true })
+    } catch (e) {
+      console.error('reset-password error:', e)
+      res.status(500).json({ error: 'Внутренняя ошибка сервера' })
     }
   })
 
@@ -115,11 +156,11 @@ module.exports = function createAdminRouter(io) {
     try {
       const result = db.kanban.deleteWorkspace(req.params.id)
       if (!result.ok) return res.status(400).json(result)
-      db.logAdmin('delete-workspace', { workspaceId: req.params.id })
+      db.logAdmin('delete-workspace', { workspaceId: req.params.id, by: req.user.id })
       io.emit('kanban:workspaces:update')
       res.json({ ok: true })
     } catch (e) {
-      res.status(500).json({ error: e.message })
+      res.status(500).json({ error: 'Внутренняя ошибка сервера' })
     }
   })
 

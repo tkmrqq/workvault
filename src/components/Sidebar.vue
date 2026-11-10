@@ -36,7 +36,8 @@
     <div class="search-row">
       <div class="search-box">
         <Search class="search-icon" :size="13" :stroke-width="2" />
-        <input v-model="search" placeholder="Поиск..." />
+        <input v-model="search" placeholder="Поиск канала…" @keydown.esc="search = ''" @keydown.enter="openFirstMatch" />
+        <button v-if="search" class="search-clear" title="Очистить (Esc)" @click="search = ''"><X :size="12" :stroke-width="2.4" /></button>
       </div>
       <button class="cp-trigger" @click="cp.open()" title="Быстрые команды (Ctrl+K)">
         <Command :size="14" :stroke-width="2" />
@@ -45,25 +46,38 @@
 
     <nav class="channel-nav">
       <div v-for="folder in filteredFolders" :key="folder.id" class="folder">
-        <button class="folder-header" @click="toggleFolder(folder.id)">
-          <ChevronRight class="folder-arrow" :class="{ open: !collapsed[folder.id] }" :size="13" :stroke-width="2.5" />
+        <button class="folder-header" :aria-expanded="isOpen(folder.id)" @click="toggleFolder(folder.id)">
+          <ChevronRight class="folder-arrow" :class="{ open: isOpen(folder.id) }" :size="13" :stroke-width="2.5" />
           <span class="folder-icon">{{ folder.icon }}</span>
           <span class="folder-name">{{ folder.name }}</span>
+          <span v-if="!isOpen(folder.id) && folderUnread(folder)" class="badge badge-folder">{{ folderUnread(folder) }}</span>
+          <span v-else class="folder-count">{{ folder.channels?.length || 0 }}</span>
         </button>
-        <div v-show="!collapsed[folder.id]" class="folder-channels">
+        <div v-show="isOpen(folder.id)" class="folder-channels">
           <button
             v-for="ch in folder.channels" :key="ch.id"
             class="channel-item"
-            :class="{ active: store.activeChId === ch.id }"
+            :class="{ active: store.activeChId === ch.id, unread: !!unread[ch.id] && store.activeChId !== ch.id }"
+            :title="ch.name"
             @click="go(ch.id)"
           >
             <span class="ch-icon">{{ ch.icon }}</span>
-            <span class="ch-name">{{ ch.name }}</span>
-            <span v-if="unread[ch.id]" class="badge">{{ unread[ch.id] }}</span>
-            <span v-if="onlineInChannel(ch.id)" class="ch-online">{{ onlineInChannel(ch.id) }}</span>
+            <span class="ch-name">
+              <template v-for="(part, i) in nameParts(ch.name)" :key="i">
+                <mark v-if="part.hit" class="ch-hit">{{ part.text }}</mark><template v-else>{{ part.text }}</template>
+              </template>
+            </span>
+            <span v-if="onlineInChannel(ch.id)" class="ch-online" :title="`В канале сейчас: ${onlineInChannel(ch.id)}`">
+              <span class="ch-online-dot" />{{ onlineInChannel(ch.id) }}
+            </span>
+            <span v-if="unread[ch.id] && store.activeChId !== ch.id" class="badge">{{ unread[ch.id] > 99 ? '99+' : unread[ch.id] }}</span>
           </button>
         </div>
       </div>
+      <div v-if="search.trim() && !filteredFolders.length" class="nav-empty">
+        Ничего не найдено по «{{ search.trim() }}»
+      </div>
+      <div v-else-if="allChannelsFlat.length > 1" class="nav-hint">Alt + ↑/↓ — следующий канал</div>
     </nav>
 
     <!-- ─── КАНБАН ──────────────────────────────────────────── -->
@@ -100,7 +114,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import EditSidebar from './EditSidebar.vue'
@@ -116,9 +130,12 @@ const showProfile = ref(false)
 const store   = useAppStore()
 const router  = useRouter()
 const search  = ref('')
-const collapsed = ref({})
+// Свёрнутые папки переживают перезагрузку
+const collapsed = ref((() => { try { return JSON.parse(localStorage.getItem('wv-collapsed-folders') || '{}') } catch { return {} } })())
+watch(collapsed, v => localStorage.setItem('wv-collapsed-folders', JSON.stringify(v)), { deep: true })
 const showEdit  = ref(false)
-const unread    = ref({})
+const unread    = computed(() => store.unread || {})
+const searching = computed(() => !!search.value.trim())
 
 const filteredFolders = computed(() => {
   if (!search.value.trim()) return store.folders
@@ -129,6 +146,42 @@ const filteredFolders = computed(() => {
 })
 
 function toggleFolder(id) { collapsed.value[id] = !collapsed.value[id] }
+// Во время поиска показываем совпадения даже в свёрнутых папках
+function isOpen(id) { return searching.value || !collapsed.value[id] }
+function folderUnread(folder) {
+  return (folder.channels || []).reduce((n, c) => n + (c.id !== store.activeChId ? (unread.value[c.id] || 0) : 0), 0)
+}
+// Подсветка совпадения без v-html
+function nameParts(name) {
+  const q = search.value.trim().toLowerCase()
+  const s = String(name || '')
+  const i = q ? s.toLowerCase().indexOf(q) : -1
+  if (i < 0) return [{ text: s, hit: false }]
+  return [
+    { text: s.slice(0, i), hit: false },
+    { text: s.slice(i, i + q.length), hit: true },
+    { text: s.slice(i + q.length), hit: false }
+  ].filter(p => p.text)
+}
+const allChannelsFlat = computed(() => filteredFolders.value.flatMap(f => f.channels || []))
+function openFirstMatch() {
+  const first = allChannelsFlat.value[0]
+  if (first) { go(first.id); search.value = '' }
+}
+// Alt+↑/↓ — переключение между каналами (по видимому списку)
+function onKeydown(e) {
+  if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return
+  const list = store.folders.flatMap(f => isOpen(f.id) ? (f.channels || []) : [])
+  if (!list.length) return
+  e.preventDefault()
+  const idx = list.findIndex(c => c.id === store.activeChId)
+  const next = e.key === 'ArrowDown'
+    ? list[(idx + 1) % list.length]
+    : list[(idx - 1 + list.length) % list.length]
+  if (next) go(next.id)
+}
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 function go(channelId) {
   store.setChannel(channelId)
@@ -208,6 +261,13 @@ function onlineInChannel(channelId) {
   font-size: var(--text-xs); color: var(--text); width: 100%;
 }
 .search-box input::placeholder { color: var(--text-faint); }
+.search-clear {
+  display: flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; flex-shrink: 0;
+  border-radius: var(--radius-full); color: var(--text-faint);
+  transition: background var(--transition), color var(--transition);
+}
+.search-clear:hover { background: var(--hover); color: var(--text); }
 
 .channel-nav { flex: 1; overflow-y: auto; padding: var(--space-2) 0; }
 .folder { margin-bottom: var(--space-1); }
@@ -222,16 +282,24 @@ function onlineInChannel(channelId) {
 .folder-arrow { display: inline-block; font-size: .75rem; transition: transform var(--transition); }
 .folder-arrow.open { transform: rotate(90deg); }
 .folder-icon { font-size: .8rem; }
-.folder-name { flex: 1; }
+.folder-name { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-count { font-size: 10px; font-weight: 600; color: var(--text-faint); opacity: 0; transition: opacity var(--transition); }
+.folder-header:hover .folder-count { opacity: 1; }
 
 .folder-channels { padding-left: var(--space-2); }
 .channel-item {
   display: flex; align-items: center; gap: var(--space-2);
-  width: 100%; padding: var(--space-1) var(--space-3) var(--space-1) var(--space-4);
+  width: calc(100% - var(--space-2)); min-height: 30px;
+  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-4);
+  margin-right: var(--space-2);
+  border-radius: var(--radius-md);
   font-size: var(--text-xs); color: var(--text-muted);
   transition: background var(--transition), color var(--transition);
   position: relative;
 }
+.channel-item:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--accent-line, var(--accent)); }
+.channel-item.unread { color: var(--text); font-weight: 700; }
+.channel-item.unread .ch-icon { color: var(--text); }
 .channel-item:hover { background: var(--hover); color: var(--text); }
 .channel-item.active { background: var(--accent-soft); color: var(--text); }
 .channel-item.active::before {
@@ -241,14 +309,26 @@ function onlineInChannel(channelId) {
 }
 .ch-icon { font-size: .85rem; color: var(--text-faint); }
 .channel-item.active .ch-icon { color: var(--accent); }
-.ch-name { flex: 1; }
+.ch-name { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-hit { background: var(--accent-soft); color: var(--accent); border-radius: 3px; padding: 0 1px; }
 .badge {
   font-size: 10px; font-weight: 700; min-width: 18px; height: 16px;
   background: var(--accent); color: white;
   border-radius: var(--radius-full);
   display: flex; align-items: center; justify-content: center; padding: 0 4px;
 }
-.ch-online { font-size: 10px; color: var(--green); font-weight: 600; }
+.badge-folder { margin-left: auto; }
+.ch-online {
+  display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0;
+  font-size: 10px; color: var(--green); font-weight: 600;
+}
+.ch-online-dot { width: 5px; height: 5px; border-radius: var(--radius-full); background: var(--green); }
+.nav-empty { padding: var(--space-4); font-size: var(--text-xs); color: var(--text-faint); text-align: center; }
+.nav-hint {
+  padding: var(--space-2) var(--space-4) 0; font-size: 10px; color: var(--text-faint);
+  opacity: .7;
+}
+@media (max-width: 860px), (hover: none) { .nav-hint { display: none; } }
 
 .online-section {
   border-top: 1px solid var(--divider);

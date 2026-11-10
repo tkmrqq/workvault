@@ -17,8 +17,10 @@
       </div>
 
       <!-- Text -->
-      <div v-if="!editing" class="msg-text" v-html="renderText(msg.text)" />
-      <div v-else class="edit-wrap">
+      <!-- Раньше тут стоял v-else: у сообщений без текста (только вложение/стикер)
+           условие выше ложно, и поле редактирования рисовалось всегда -->
+      <div v-if="!editing && msg.text" class="msg-text" v-html="renderText(msg.text)" @click="onTextClick" @keydown.enter="onTextClick" />
+      <div v-else-if="editing" class="edit-wrap">
         <textarea v-model="editText" class="edit-input"
           @keydown.enter.exact.prevent="submitEdit"
           @keydown.escape="editing = false"
@@ -53,8 +55,14 @@
         </div>
       </div>
 
+      <!-- Стикер — без рамки и подписей -->
+      <div v-if="msg.attachment?.isSticker" class="msg-sticker-wrap">
+        <img :src="attachUrl" :alt="msg.attachment.emoji || 'Стикер'" :title="msg.attachment.emoji || ''"
+          class="msg-sticker" loading="lazy" draggable="false" />
+      </div>
+
       <!-- Image -->
-      <div v-if="msg.attachment?.isImage" class="msg-img-wrap">
+      <div v-else-if="msg.attachment?.isImage" class="msg-img-wrap">
         <img :src="attachUrl" :alt="msg.attachment.name" class="msg-img" loading="lazy"
           @click="emit('open-image', { url: attachUrl, alt: msg.attachment.name })" />
       </div>
@@ -183,7 +191,10 @@ const viewingUser = ref(null)
 // актуальную запись; если юзер удалён или запрос не прошёл — падаем обратно
 // на то, что есть в сообщении, чтобы модалка не осталась пустой.
 async function openProfile(userId) {
-  viewingUser.value = { id: props.msg.user_id, name: props.msg.user_name, avatar: props.msg.user_avatar, color: props.msg.user_color }
+  const known = store.usersById?.[userId]
+  viewingUser.value = userId === props.msg.user_id
+    ? { id: props.msg.user_id, name: props.msg.user_name, avatar: props.msg.user_avatar, color: props.msg.user_color }
+    : (known ? { ...known } : { id: userId, name: '…' })
   try {
     const r = await fetch(`${API}/api/users/${userId}`)
     if (r.ok) viewingUser.value = await r.json()
@@ -240,9 +251,19 @@ const mentionsMe = computed(() => !isOwn.value && store.mentionsMe(props.msg.tex
 const parsedLinkMeta = computed(() => {
   const m = props.msg.link_meta
   if (!m) return null
-  if (typeof m === 'string') { try { return JSON.parse(m) } catch { return null } }
-  return m
+  let meta = m
+  if (typeof m === 'string') { try { meta = JSON.parse(m) } catch { return null } }
+  if (!meta || typeof meta !== 'object') return null
+  // linkMeta приходит от клиента — javascript:/data: в href или src не пускаем
+  return { ...meta, url: safeUrl(meta.url), image: safeUrl(meta.image) }
 })
+function safeUrl(u) {
+  if (typeof u !== 'string') return null
+  try {
+    const url = new URL(u, window.location.href)
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : null
+  } catch { return null }
+}
 
 const groupedReactions = computed(() => {
   const map = {}
@@ -318,15 +339,36 @@ function renderText(text) {
   return highlightMentions(baseRender(text))
 }
 // @упоминания подсвечиваем уже в готовом (экранированном) HTML
+// Экранированное имя → id: mentionRegex матчит по уже экранированному HTML
+const _escName = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+const mentionIdByName = computed(() => {
+  const m = {}
+  for (const u of store.users || []) if (u?.name) m[_escName(u.name)] = u.id
+  return m
+})
 function highlightMentions(html) {
   const re = store.mentionRegex
   if (!re) return html
-  return html.replace(re, (_, pre, name) =>
-    `${pre}<span class="mention${name === store.myMentionName ? ' me' : ''}">@${name}</span>`)
+  return html.replace(re, (_, pre, name) => {
+    const id = Number(mentionIdByName.value[name])
+    const attrs = Number.isInteger(id) ? ` data-user-id="${id}" role="button" tabindex="0" title="Открыть профиль"` : ''
+    return `${pre}<span class="mention${name === store.myMentionName ? ' me' : ''}"${attrs}>@${name}</span>`
+  })
+}
+// Клик по @упоминанию — делегирование, т.к. текст рендерится через v-html
+function onTextClick(e) {
+  const el = e.target?.closest?.('.mention[data-user-id]')
+  if (!el) return
+  e.preventDefault()
+  e.stopPropagation()
+  const id = Number(el.dataset.userId)
+  if (Number.isInteger(id)) openProfile(id)
 }
 function baseRender(text) {
   return text
+    // Кавычки тоже экранируем: иначе https://x"onmouseover=... выходил из href="..."
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.*?)\*/g, '<em>$1</em>')
     .replace(/`(.*?)`/g, '<code>$1</code>')
@@ -411,6 +453,12 @@ function onContextMenu(e) {
 </script>
 
 <style scoped>
+.msg-sticker-wrap { margin-top: 4px; line-height: 0; }
+.msg-sticker {
+  width: 160px; height: 160px; object-fit: contain;
+  user-select: none; -webkit-user-drag: none;
+}
+
 .msg-wrap {
   display: flex; gap: var(--space-3);
   padding: var(--space-2) var(--space-5);
@@ -445,6 +493,16 @@ function onContextMenu(e) {
   padding: 0 4px; border-radius: 5px;
   background: var(--accent-soft); color: var(--accent);
   font-weight: 600; white-space: nowrap;
+}
+.msg-text :deep(.mention[data-user-id]) {
+  cursor: pointer;
+  transition: background var(--transition), box-shadow var(--transition);
+}
+.msg-text :deep(.mention[data-user-id]:hover),
+.msg-text :deep(.mention[data-user-id]:focus-visible) {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--accent-line, var(--accent));
+  text-decoration: underline;
 }
 .msg-text :deep(.mention.me) {
   background: color-mix(in srgb, var(--warning, #f5a524) 26%, transparent);

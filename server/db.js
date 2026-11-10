@@ -180,6 +180,25 @@ try { db.prepare('CREATE INDEX IF NOT EXISTS idx_kanban_cards_source_msg ON kanb
 // Колонка messages.crm_done — легаси от «Занести в CRM». В новых БД её больше
 // не создаём, в старых просто не используем (DROP COLUMN в SQLite не стоит риска).
 try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN source_snapshot TEXT').run() } catch { }
+
+// Приватные рабочие зоны: owner_id = NULL — общая зона (как раньше),
+// owner_id = id юзера — личная, видна и доступна только ему.
+try { db.prepare('ALTER TABLE kanban_workspaces ADD COLUMN owner_id INTEGER REFERENCES users(id) ON DELETE CASCADE').run() } catch { }
+try { db.prepare('CREATE INDEX IF NOT EXISTS idx_kanban_ws_owner ON kanban_workspaces(owner_id)').run() } catch { }
+
+// Стикеры: общая библиотека команды, сгруппированная по пакам.
+// Файл лежит в uploads, в сообщении храним только sticker_id → url берём из БД,
+// клиент не может подсунуть произвольную ссылку «как стикер».
+db.exec(`
+  CREATE TABLE IF NOT EXISTS stickers (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    pack       TEXT    NOT NULL DEFAULT 'Общие',
+    url        TEXT    NOT NULL,
+    emoji      TEXT,
+    user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at INTEGER DEFAULT (unixepoch())
+  );
+`)
 // Профиль: должность, часовой пояс и статус (со временем автосброса)
 for (const col of ['title TEXT', 'timezone TEXT', 'status_emoji TEXT', 'status_text TEXT', 'status_until INTEGER']) {
   try { db.prepare(`ALTER TABLE users ADD COLUMN ${col}`).run() } catch { }
@@ -378,14 +397,34 @@ function updateFolders(folders) {
 // ─── QUERIES ─────────────────────────────────────────────
 // ─── Связь сообщение ↔ задача ─────────────────────────────
 // Компактное представление задачи для чипа под сообщением
+// ВАЖНО: чип виден всем в канале, поэтому сюда попадают только карточки
+// из ОБЩИХ зон. Личные задачи из чата отдаём владельцу отдельно (privateTasksForMessages).
+const TASK_CHIP_SELECT = `
+    SELECT k.id, k.title, k.done_at, k.archived_at, k.source_message_id,
+           c.title as column_title, c.color as column_color, c.is_terminal, c.workspace_id,
+           w.owner_id as workspace_owner_id
+    FROM kanban_cards k
+    LEFT JOIN kanban_columns c ON k.column_id = c.id
+    LEFT JOIN kanban_workspaces w ON w.id = c.workspace_id`
 function taskForMessage(messageId) {
-  return db.prepare(`
-    SELECT k.id, k.title, k.done_at, k.archived_at,
-           c.title as column_title, c.color as column_color, c.is_terminal, c.workspace_id
-    FROM kanban_cards k LEFT JOIN kanban_columns c ON k.column_id = c.id
-    WHERE k.source_message_id = ?
+  return db.prepare(`${TASK_CHIP_SELECT}
+    WHERE k.source_message_id = ? AND w.owner_id IS NULL
     ORDER BY k.id DESC LIMIT 1
   `).get(messageId) || null
+}
+function privateTaskForMessage(messageId, ownerId) {
+  return db.prepare(`${TASK_CHIP_SELECT}
+    WHERE k.source_message_id = ? AND w.owner_id = ?
+    ORDER BY k.id DESC LIMIT 1
+  `).get(messageId, ownerId) || null
+}
+function privateTasksForMessages(messageIds, ownerId) {
+  const ids = (messageIds || []).map(Number).filter(Boolean)
+  if (!ids.length) return []
+  return db.prepare(`${TASK_CHIP_SELECT}
+    WHERE w.owner_id = ? AND k.source_message_id IN (${ids.map(() => '?').join(',')})
+    ORDER BY k.id DESC
+  `).all(ownerId, ...ids)
 }
 
 // Сводка треда для корневого сообщения: сколько ответов, когда последний, кто отвечал
@@ -529,6 +568,8 @@ module.exports = {
   votePoll,
   setMessagePoll: (id, json) => db.prepare('UPDATE messages SET poll = ? WHERE id = ?').run(json, id),
   taskForMessage,
+  privateTaskForMessage,
+  privateTasksForMessages,
   messageSnapshot,
   setCardSourceSnapshot,
   threadMeta,
@@ -662,28 +703,64 @@ module.exports = {
   },
   getAdminLog: (limit = 50) =>
     db.prepare('SELECT * FROM admin_log ORDER BY created_at DESC LIMIT ?').all(limit),
+  stickers: {
+    list: () => db.prepare(`
+      SELECT s.id, s.pack, s.url, s.emoji, s.user_id, s.created_at, u.name as user_name
+      FROM stickers s LEFT JOIN users u ON u.id = s.user_id
+      ORDER BY s.pack COLLATE NOCASE, s.id
+    `).all(),
+    get: (id) => db.prepare('SELECT * FROM stickers WHERE id=?').get(id) || null,
+    create: (pack, url, emoji, userId) => {
+      const r = db.prepare('INSERT INTO stickers (pack, url, emoji, user_id) VALUES (?,?,?,?)')
+        .run(pack || 'Общие', url, emoji || null, userId || null)
+      return db.prepare('SELECT * FROM stickers WHERE id=?').get(r.lastInsertRowid)
+    },
+    remove: (id) => db.prepare('DELETE FROM stickers WHERE id=?').run(id),
+  },
+  // Активные refresh-токены юзера — гасим при удалении/смене роли/сбросе пароля
+  revokeUserSessions: (userId) => db.prepare('DELETE FROM refresh_tokens WHERE user_id=?').run(userId),
+  hasAnyAdmin: () => !!db.prepare("SELECT 1 FROM users WHERE role='admin' LIMIT 1").get(),
+  channelExists: (id) => !!db.prepare('SELECT 1 FROM channels WHERE id=?').get(id),
   kanban: {
     // ── Рабочие зоны ──────────────────────────────────────
-    getWorkspaces: () => db.prepare('SELECT * FROM kanban_workspaces ORDER BY sort').all(),
-    createWorkspace: (name, icon, color) => {
+    // Только доступные юзеру: все общие + его личные. is_private — для фронта.
+    getWorkspaces: (userId) => db.prepare(`
+      SELECT *, CASE WHEN owner_id IS NULL THEN 0 ELSE 1 END AS is_private
+      FROM kanban_workspaces WHERE owner_id IS NULL OR owner_id = ?
+      ORDER BY (owner_id IS NOT NULL), sort
+    `).all(userId ?? -1),
+    getWorkspace: (id) => db.prepare('SELECT *, CASE WHEN owner_id IS NULL THEN 0 ELSE 1 END AS is_private FROM kanban_workspaces WHERE id=?').get(id) || null,
+    workspaceIdOfColumn: (columnId) => db.prepare('SELECT workspace_id FROM kanban_columns WHERE id=?').get(columnId)?.workspace_id ?? null,
+    workspaceIdOfCard: (cardId) => db.prepare(`
+      SELECT c.workspace_id FROM kanban_cards k JOIN kanban_columns c ON c.id = k.column_id WHERE k.id=?
+    `).get(cardId)?.workspace_id ?? null,
+    cardIdOfSubtask: (subtaskId) => db.prepare('SELECT card_id FROM kanban_subtasks WHERE id=?').get(subtaskId)?.card_id ?? null,
+    // Первая общая зона — дефолт, когда клиент не указал workspace_id
+    firstSharedWorkspaceId: () => db.prepare('SELECT id FROM kanban_workspaces WHERE owner_id IS NULL ORDER BY sort, id LIMIT 1').get()?.id ?? null,
+    createWorkspace: (name, icon, color, ownerId = null) => {
       const pos = db.prepare('SELECT COUNT(*) as c FROM kanban_workspaces').get().c
-      const r = db.prepare('INSERT INTO kanban_workspaces (name, icon, color, sort) VALUES (?,?,?,?)')
-        .run(name || 'Новая зона', icon || 'folder', color || '#7c6af7', pos)
+      const r = db.prepare('INSERT INTO kanban_workspaces (name, icon, color, sort, owner_id) VALUES (?,?,?,?,?)')
+        .run(name || 'Новая зона', icon || 'folder', color || '#7c6af7', pos, ownerId || null)
       const wsId = r.lastInsertRowid
       // Новой зоне сразу даём стандартный набор колонок
       db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'To Do', 0, '#61afef', 0)
       db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'In Progress', 1, '#e8af34', 0)
       db.prepare("INSERT INTO kanban_columns (workspace_id, title, position, color, is_terminal) VALUES (?,?,?,?,?)").run(wsId, 'Done', 2, '#4caf7d', 1)
-      return db.prepare('SELECT * FROM kanban_workspaces WHERE id=?').get(wsId)
+      return db.prepare('SELECT *, CASE WHEN owner_id IS NULL THEN 0 ELSE 1 END AS is_private FROM kanban_workspaces WHERE id=?').get(wsId)
     },
     updateWorkspace: (id, { name, icon, color }) => {
       db.prepare('UPDATE kanban_workspaces SET name=COALESCE(?,name), icon=COALESCE(?,icon), color=COALESCE(?,color) WHERE id=?')
         .run(name || null, icon || null, color || null, id)
-      return db.prepare('SELECT * FROM kanban_workspaces WHERE id=?').get(id)
+      return db.prepare('SELECT *, CASE WHEN owner_id IS NULL THEN 0 ELSE 1 END AS is_private FROM kanban_workspaces WHERE id=?').get(id)
     },
     deleteWorkspace: (id) => {
-      const total = db.prepare('SELECT COUNT(*) as c FROM kanban_workspaces').get().c
-      if (total <= 1) return { ok: false, error: 'Нельзя удалить последнюю рабочую зону' }
+      const ws = db.prepare('SELECT owner_id FROM kanban_workspaces WHERE id=?').get(id)
+      if (!ws) return { ok: false, error: 'Зона не найдена' }
+      // Личные зоны можно удалять свободно; последнюю ОБЩУЮ — нельзя
+      if (ws.owner_id == null) {
+        const total = db.prepare('SELECT COUNT(*) as c FROM kanban_workspaces WHERE owner_id IS NULL').get().c
+        if (total <= 1) return { ok: false, error: 'Нельзя удалить последнюю общую рабочую зону' }
+      }
       db.prepare('DELETE FROM kanban_workspaces WHERE id=?').run(id)
       return { ok: true }
     },
@@ -798,8 +875,9 @@ module.exports = {
         ? db.prepare('SELECT * FROM kanban_columns WHERE workspace_id=? ORDER BY position LIMIT 1').get(workspaceId)
         : null
       return inWs || db.prepare(`
-        SELECT c.* FROM kanban_columns c LEFT JOIN kanban_workspaces w ON w.id = c.workspace_id
-        ORDER BY w.id, c.position LIMIT 1
+        SELECT c.* FROM kanban_columns c JOIN kanban_workspaces w ON w.id = c.workspace_id
+        WHERE w.owner_id IS NULL
+        ORDER BY w.sort, w.id, c.position LIMIT 1
       `).get() || null
     },
     getColumn: (id) => db.prepare('SELECT * FROM kanban_columns WHERE id=?').get(id) || null,
