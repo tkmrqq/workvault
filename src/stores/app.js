@@ -40,6 +40,65 @@ export const useAppStore = defineStore('app', () => {
   const hasMore     = ref({})
   const onlineList  = ref([])
   const typingMap   = ref({})
+  // Переход «к исходному сообщению» из карточки: MessageList ждёт, пока канал
+  // загрузится, скроллит к сообщению и подсвечивает его (flashMsgId)
+  const focusTarget = ref(null) // { channelId, messageId, replyId? }
+
+  // ── Пользователи и @упоминания ──
+  const users = ref([])
+  const usersById = computed(() => {
+    const m = {}
+    for (const u of users.value) m[u.id] = u
+    return m
+  })
+  function statusActive(u) {
+    if (!u || !(u.status_text || u.status_emoji)) return false
+    return !u.status_until || u.status_until * 1000 > Date.now()
+  }
+  const myStatusLine = computed(() => statusActive(user.value)
+    ? [user.value.status_emoji, user.value.status_text].filter(Boolean).join(' ')
+    : '')
+
+  // Вставка текста в поле ввода извне (контекстное меню, профиль).
+  // parentId: null — основное поле канала, id — поле в панели треда.
+  const composerInsert = ref(null)
+  function insertIntoComposer(text, parentId = null) {
+    composerInsert.value = { text, parentId, nonce: Date.now() + Math.random() }
+  }
+  async function loadUsers(force = false) {
+    if (users.value.length && !force) return users.value
+    try { users.value = await fetchUsers() } catch { }
+    return users.value
+  }
+  const _escHtml = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const _escRe   = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  // Ищем @Имя в уже экранированном HTML; длинные имена первыми, чтобы
+  // «@Иван Петров» не подсветилось как «@Иван» + « Петров»
+  const mentionRegex = computed(() => {
+    const names = users.value.map(u => u.name).filter(Boolean)
+      .map(_escHtml).sort((a, b) => b.length - a.length).map(_escRe)
+    if (!names.length) return null
+    return new RegExp(String.raw`(^|[\s(>])@(` + names.join('|') + String.raw`)(?![\p{L}\p{N}_])`, 'gu')
+  })
+  const myMentionName = computed(() => user.value?.name ? _escHtml(user.value.name) : '')
+  function mentionsMe(text) {
+    const n = user.value?.name
+    if (!text || !n || !text.includes('@')) return false
+    return new RegExp(String.raw`(^|[\s(])@` + _escRe(n) + String.raw`(?![\p{L}\p{N}_])`, 'u').test(text)
+  }
+  function _notify(title, body) {
+    if (window.electronAPI) window.electronAPI.notify?.(title, body)
+    else if ('Notification' in window && Notification.permission === 'granted') new Notification(title, { body })
+  }
+  // Открытый тред (правая панель в чате)
+  const threadParentId = ref(null)
+  const threadParent   = ref(null)
+  const threadReplies  = ref([])
+  const threadLoading  = ref(false)
+  const threadFocusId  = ref(null) // к какому ответу прокрутить после загрузки
+  let threadReq        = 0
+  const flashMsgId  = ref(null)
+  let flashTimer    = null
   // Фильтр вложений — свой на каждый канал, по умолчанию 'all'
   const attachmentFilters = ref(JSON.parse(localStorage.getItem('wv-attach-filters') || '{}'))
   let socket        = null
@@ -209,6 +268,23 @@ export const useAppStore = defineStore('app', () => {
 
     socket.on('message:new', msg => { _pushMessage(msg) })
 
+    // Новый ответ в треде — показываем, только если этот тред сейчас открыт;
+    // счётчик под корнем обновляется отдельным message:thread
+    socket.on('thread:reply', msg => {
+      if (msg.user_id !== user.value?.id && mentionsMe(msg.text) && (document.hidden || msg.parent_id !== threadParentId.value)) {
+        _notify(`${msg.user_name} упоминает вас в треде`, msg.text || '')
+      }
+      if (msg.parent_id !== threadParentId.value) return
+      if (!threadReplies.value.find(m => m.id === msg.id)) {
+        threadReplies.value = [...threadReplies.value, msg]
+        markMessageEnter(msg.id)
+      }
+    })
+
+    socket.on('message:thread', ({ messageId, ...meta }) => {
+      _patchMessage(messageId, m => ({ ...m, ...meta }))
+    })
+
     socket.on('message:edited', ({ messageId, text }) => {
       _patchMessage(messageId, m => ({ ...m, text, edited: 1 }))
     })
@@ -217,6 +293,30 @@ export const useAppStore = defineStore('app', () => {
 
     socket.on('reaction:update', ({ messageId, reactions }) => {
       _patchMessage(messageId, m => ({ ...m, reactions }))
+    })
+
+    socket.on('poll:update', ({ messageId, poll }) => {
+      _patchMessage(messageId, m => ({ ...m, poll }))
+    })
+
+    // Задача, привязанная к сообщению, создана / переехала в другую колонку /
+    // ушла в архив / удалена (task === null)
+    socket.on('message:task', ({ messageId, task }) => {
+      _patchMessage(messageId, m => ({ ...m, task: task || null }))
+    })
+
+    socket.on('user:updated', u => {
+      if (!u?.id) return
+      users.value = users.value.some(x => x.id === u.id)
+        ? users.value.map(x => x.id === u.id ? { ...x, ...u } : x)
+        : [...users.value, u]
+      if (user.value?.id === u.id) user.value = { ...user.value, ...u }
+      const patch = m => m.user_id === u.id ? { ...m, user_name: u.name, user_avatar: u.avatar, user_color: u.color } : m
+      for (const chId of Object.keys(messages.value)) {
+        if (messages.value[chId].some(m => m.user_id === u.id)) messages.value[chId] = messages.value[chId].map(patch)
+      }
+      if (threadReplies.value?.some?.(m => m.user_id === u.id)) threadReplies.value = threadReplies.value.map(patch)
+      if (threadParent.value?.user_id === u.id) threadParent.value = patch(threadParent.value)
     })
 
     socket.on('typing:update', ({ userName, typing }) => {
@@ -245,12 +345,12 @@ export const useAppStore = defineStore('app', () => {
       messages.value[chId].push(msg)
       if (chId === activeChId.value) markMessageEnter(msg.id)
     }
-    if (chId !== activeChId.value && user.value?.id !== msg.user_id) {
-      const body = msg.text || (msg.attachment ? '📎 файл' : '')
-      if (window.electronAPI) {
-        window.electronAPI.notify?.(msg.user_name, body)
-      } else if ('Notification' in window && Notification.permission === 'granted') {
-        new Notification(msg.user_name, { body })
+    if (user.value?.id !== msg.user_id) {
+      const mentioned = mentionsMe(msg.text)
+      // Чужой канал — как раньше; активный — только если упомянули, а окно свёрнуто
+      if (chId !== activeChId.value || (mentioned && document.hidden)) {
+        const body = msg.text || (msg.attachment ? '📎 файл' : '')
+        _notify(mentioned ? `${msg.user_name} упоминает вас` : msg.user_name, body)
       }
     }
   }
@@ -263,12 +363,53 @@ export const useAppStore = defineStore('app', () => {
         break
       }
     }
+    // То же сообщение может быть в открытом треде (корень или ответ)
+    const ti = threadReplies.value.findIndex(m => m.id === id)
+    if (ti !== -1) threadReplies.value = threadReplies.value.map((m, i) => i === ti ? fn(m) : m)
+    if (threadParent.value?.id === id) threadParent.value = fn(threadParent.value)
   }
 
   function _removeMessage(id) {
     for (const chId in messages.value) {
       messages.value[chId] = messages.value[chId].filter(m => m.id !== id)
     }
+    if (threadParentId.value === id) closeThread()
+    else threadReplies.value = threadReplies.value.filter(m => m.id !== id)
+  }
+
+  // ── Треды ─────────────────────────────────────────────────
+  async function openThread(parentId, focusReplyId = null) {
+    parentId = Number(parentId)
+    threadFocusId.value = focusReplyId ? Number(focusReplyId) : null
+    if (threadParentId.value === parentId && threadParent.value && !threadLoading.value) return
+    const req = ++threadReq
+    threadParentId.value = parentId
+    // Пока грузим — показываем корень из уже загруженной ленты, чтобы панель не мигала
+    threadParent.value  = (messages.value[activeChId.value] || []).find(m => m.id === parentId) || null
+    threadReplies.value = []
+    threadLoading.value = true
+    try {
+      const res = await fetch(`${API}/api/messages/${parentId}/thread`)
+      if (!res.ok) throw new Error('thread load failed')
+      const data = await res.json()
+      if (req !== threadReq) return
+      threadParentId.value = data.parent.id
+      threadParent.value   = data.parent
+      threadReplies.value  = data.replies
+    } catch {
+      if (req === threadReq) closeThread()
+    } finally {
+      if (req === threadReq) threadLoading.value = false
+    }
+  }
+
+  function closeThread() {
+    threadReq++
+    threadParentId.value = null
+    threadParent.value   = null
+    threadReplies.value  = []
+    threadLoading.value  = false
+    threadFocusId.value  = null
   }
 
   // ── API ────────────────────────────────────────────────
@@ -278,6 +419,7 @@ export const useAppStore = defineStore('app', () => {
   }
 
   async function setChannel(chId) {
+    if (threadParentId.value && chId !== activeChId.value) closeThread()
     activeChId.value = chId
     socket?.emit('channel:join', { channelId: chId })
     if (!messages.value[chId]) {
@@ -309,7 +451,7 @@ export const useAppStore = defineStore('app', () => {
   // "выстрелил и забыл": если сервер не смог сохранить сообщение (протухшая
   // сессия, невалидный channelId и т.п.), фронт об этом никак не узнавал —
   // текст уже очищался в MessageInput, и сообщение просто исчезало без следа.
-  async function sendMessage({ text, attachment, linkMeta }) {
+  async function sendMessage({ text, attachment, linkMeta, parentId = null, poll = null }) {
     if (!activeChId.value || !user.value) throw new Error('Нет активного канала')
     if (!socket?.connected) throw new Error('Нет соединения с сервером — сообщение не отправлено')
     return new Promise((resolve, reject) => {
@@ -317,7 +459,9 @@ export const useAppStore = defineStore('app', () => {
         channelId:  activeChId.value,
         text:       text || null,
         attachment: attachment || null,
-        linkMeta:   linkMeta || null
+        linkMeta:   linkMeta || null,
+        parentId:   parentId || null,
+        poll:       poll || null
       }, (err, ack) => {
         // err — таймаут/дисконнект самого socket.io (см. .timeout() выше)
         if (err) return reject(new Error('Сервер не ответил — проверь соединение'))
@@ -358,12 +502,43 @@ export const useAppStore = defineStore('app', () => {
     })
   }
 
+  function votePoll(messageId, option) {
+    socket?.emit('poll:vote', { messageId, option })
+  }
+
   function toggleReaction(messageId, emoji) {
     socket?.emit('reaction:toggle', {
       messageId,
       emoji,
       channelId: activeChId.value
     })
+  }
+
+  // Сообщение → задача на канбане. Зона — последняя открытая на канбане
+  // (KanbanView кладёт её в localStorage), колонка — первая в этой зоне.
+  async function createTaskFromMessage(messageId, { title } = {}) {
+    const workspaceId = Number(localStorage.getItem('wv-kanban-workspace')) || null
+    const res = await fetch(`${API}/api/messages/${messageId}/task`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ title: title || null, workspace_id: workspaceId })
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Не удалось создать задачу')
+    const { existed, ...task } = data
+    _patchMessage(messageId, m => ({ ...m, task }))
+    return data
+  }
+
+  // replyId — если цель внутри треда: скроллим к корню и открываем тред на нужном ответе
+  function jumpToMessage(channelId, messageId, replyId = null) {
+    focusTarget.value = { channelId: Number(channelId), messageId: Number(messageId), replyId: replyId ? Number(replyId) : null }
+  }
+
+  function flashMessage(id) {
+    flashMsgId.value = id
+    clearTimeout(flashTimer)
+    flashTimer = setTimeout(() => { flashMsgId.value = null }, 2200)
   }
 
   function getSocket() { return socket }
@@ -381,13 +556,17 @@ export const useAppStore = defineStore('app', () => {
   // sessionChecked), а не сразу здесь — иначе будет гонка с установкой роутов
 
   return {
+    users, loadUsers, mentionRegex, myMentionName, mentionsMe,
+    usersById, statusActive, myStatusLine, composerInsert, insertIntoComposer,
     user, sessionChecked, theme, folders, activeChId, activeChannel, allChannels,
     activeMessages, filteredActiveMessages, activeAttachmentFilter, setAttachmentFilter,
     hasMore, onlineList, typingNames,
     fetchUsers, checkSession, register, login, setPassword, logout, toggleTheme, getSocket,
     fetchFolders, setChannel, loadMore,
     sendMessage, uploadFile, unfurlUrl,
-    editMessage, deleteMessage, toggleReaction, sendTyping,
-    isMessageEntering
+    editMessage, deleteMessage, toggleReaction, votePoll, sendTyping,
+    isMessageEntering,
+    createTaskFromMessage, focusTarget, jumpToMessage, flashMsgId, flashMessage,
+    threadParentId, threadParent, threadReplies, threadLoading, threadFocusId, openThread, closeThread
   }
 })

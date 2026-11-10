@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Notification, ipcMain, shell, dialog } = require('electron')
+const { app, BrowserWindow, Notification, ipcMain, shell, dialog, Menu, clipboard } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const https = require('https')
@@ -43,6 +43,54 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
     return { action: 'deny' }
+  })
+
+  // Проверка орфографии: русский + английский (на macOS язык берётся из системы)
+  try { mainWindow.webContents.session.setSpellCheckerLanguages(['ru', 'en-US']) } catch { }
+
+  // Нативное контекстное меню. Срабатывает только если страница сама не
+  // перехватила contextmenu — у сообщений своё меню внутри интерфейса.
+  mainWindow.webContents.on('context-menu', (_e, p) => {
+    const wc = mainWindow.webContents
+    const t = []
+    const sep = () => { if (t.length && t[t.length - 1].type !== 'separator') t.push({ type: 'separator' }) }
+    const safeExternal = (u) => { try { if (['http:', 'https:', 'mailto:'].includes(new URL(u).protocol)) shell.openExternal(u) } catch { } }
+
+    if (p.isEditable && p.misspelledWord) {
+      const sugg = (p.dictionarySuggestions || []).slice(0, 5)
+      for (const s of sugg) t.push({ label: s, click: () => wc.replaceMisspelling(s) })
+      if (!sugg.length) t.push({ label: 'Нет вариантов', enabled: false })
+      t.push({ label: 'Добавить в словарь', click: () => wc.session.addWordToSpellCheckerDictionary(p.misspelledWord) })
+      sep()
+    }
+    if (p.linkURL) {
+      t.push({ label: 'Открыть ссылку в браузере', click: () => safeExternal(p.linkURL) })
+      t.push({ label: 'Копировать ссылку', click: () => clipboard.writeText(p.linkURL) })
+      sep()
+    }
+    if (p.mediaType === 'image' && p.srcURL) {
+      t.push({ label: 'Копировать изображение', click: () => wc.copyImageAt(p.x, p.y) })
+      t.push({ label: 'Сохранить изображение как…', click: () => wc.downloadURL(p.srcURL) })
+      t.push({ label: 'Копировать адрес изображения', click: () => clipboard.writeText(p.srcURL) })
+      sep()
+    }
+    if (p.isEditable) {
+      const f = p.editFlags || {}
+      t.push({ label: 'Отменить', role: 'undo', enabled: !!f.canUndo })
+      t.push({ label: 'Повторить', role: 'redo', enabled: !!f.canRedo })
+      sep()
+      t.push({ label: 'Вырезать', role: 'cut', enabled: !!f.canCut })
+      t.push({ label: 'Копировать', role: 'copy', enabled: !!f.canCopy })
+      t.push({ label: 'Вставить', role: 'paste', enabled: !!f.canPaste })
+      sep()
+      t.push({ label: 'Выделить всё', role: 'selectAll' })
+    } else if (p.selectionText && p.selectionText.trim()) {
+      t.push({ label: 'Копировать', role: 'copy' })
+      t.push({ label: 'Найти в Google', click: () => safeExternal('https://www.google.com/search?q=' + encodeURIComponent(p.selectionText.trim().slice(0, 200))) })
+    }
+    if (isDev) { sep(); t.push({ label: 'Просмотреть код', click: () => wc.inspectElement(p.x, p.y) }) }
+    while (t.length && t[t.length - 1].type === 'separator') t.pop()
+    if (t.length) Menu.buildFromTemplate(t).popup({ window: mainWindow })
   })
 
   mainWindow.webContents.on('will-navigate', (event, url) => {

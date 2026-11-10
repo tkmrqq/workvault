@@ -64,9 +64,37 @@
             <!-- View mode -->
             <template v-if="!editMode">
               <h1 class="card-page-title">{{ card.title }}</h1>
+
+              <!-- Задача из чата -->
+              <section v-if="sourceView" class="chat-origin" :class="{ deleted: sourceView.deleted }">
+                <header class="co-head">
+                  <span class="co-badge"><MessageSquare :size="12" :stroke-width="2.4" /> Из чата</span>
+                  <span class="co-channel">{{ sourceView.channelIcon }} #{{ sourceView.channelName }}</span>
+                  <span v-if="sourceView.inThread" class="co-tag">в треде</span>
+                  <span v-else-if="sourceView.replies" class="co-tag">ответов в треде: {{ sourceView.replies }}</span>
+                  <span v-if="sourceView.date" class="co-date">{{ sourceView.date }}</span>
+                </header>
+                <div class="co-msg">
+                  <span class="co-avatar" :style="{ background: sourceView.color + '22', color: sourceView.color }"><AvatarContent :value="sourceView.avatar" :name="sourceView.author" /></span>
+                  <div class="co-body">
+                    <div class="co-author" :style="{ color: sourceView.color }">{{ sourceView.author }}</div>
+                    <div v-if="sourceView.text" class="co-text" :class="{ clamped: sourceLong && !sourceExpanded }">{{ sourceView.text }}</div>
+                    <button v-if="sourceLong" type="button" class="co-more" @click="sourceExpanded = !sourceExpanded">{{ sourceExpanded ? 'Свернуть' : 'Показать полностью' }}</button>
+                    <div v-if="sourceView.attachment" class="co-file">��� {{ sourceView.attachment }}</div>
+                  </div>
+                </div>
+                <footer class="co-foot">
+                  <span v-if="sourceView.deleted" class="co-note">Сообщение удалено из чата — это сохранённая копия</span>
+                  <button v-else type="button" class="co-open" @click="goToSourceMessage">
+                    {{ sourceView.inThread ? 'Открыть тред' : 'Открыть в чате' }}
+                    <ArrowRightIcon :size="14" :stroke-width="2.2" />
+                  </button>
+                </footer>
+              </section>
               <div v-if="card.description" class="card-page-desc markdown-body compact-mobile" v-html="renderMarkdown(card.description)"></div>
               <button v-if="card.description" type="button" class="desc-expand-hint mobile-only" @click="descFullscreen = true">Читать целиком</button>
               <p v-else class="card-page-desc empty">Нет описания</p>
+
             </template>
 
             <!-- Edit mode -->
@@ -86,7 +114,7 @@
                   <label class="field-label">Исполнитель</label>
                   <select v-model="edit.assignee_id" class="field-select">
                     <option :value="null">— Не назначено</option>
-                    <option v-for="u in users" :key="u.id" :value="u.id">{{ u.avatar }} {{ u.name }}</option>
+                    <option v-for="u in users" :key="u.id" :value="u.id">{{ $avatarText(u.avatar) }} {{ u.name }}</option>
                   </select>
                 </div>
               </div>
@@ -115,7 +143,7 @@
                 <div v-if="card.assignee_name" class="meta-assignee">
                   <span class="assignee-avatar"
                     :style="{ background: card.assignee_color + '22', color: card.assignee_color }">
-                    {{ card.assignee_avatar }}
+                    <AvatarContent :value="card.assignee_avatar" :name="card.assignee_name" />
                   </span>
                   {{ card.assignee_name }}
                 </div>
@@ -213,7 +241,7 @@
                     <div v-if="sub.assignee_name" class="sub-card-assignee">
                       <span class="assignee-avatar-sm"
                         :style="{ background: sub.assignee_color + '22', color: sub.assignee_color }">
-                        {{ sub.assignee_avatar }}
+                        <AvatarContent :value="sub.assignee_avatar" :name="sub.assignee_name" />
                       </span>
                       {{ sub.assignee_name }}
                     </div>
@@ -265,7 +293,7 @@
                 <label class="field-label">Исполнитель</label>
                 <select v-model="subModal.assignee_id" class="field-select">
                   <option :value="null">— Не назначено</option>
-                  <option v-for="u in users" :key="u.id" :value="u.id">{{ u.avatar }} {{ u.name }}</option>
+                  <option v-for="u in users" :key="u.id" :value="u.id">{{ $avatarText(u.avatar) }} {{ u.name }}</option>
                 </select>
               </div>
             </div>
@@ -412,13 +440,52 @@ import { uiPreferences } from '@/composables/useUiPreferences'
 import {
   ArrowLeft, Archive, RotateCcw, Pencil, X, Plus,
   ArrowDown, ArrowRight as ArrowRightIcon, ArrowUp as ArrowUpIcon, Tag, GripVertical,
-  ListChecks, Copy, Download, FolderInput
+  ListChecks, Copy, Download, FolderInput, MessageSquare
 } from 'lucide-vue-next'
 
 const store  = useAppStore()
 const route  = useRoute()
 const router = useRouter()
 const API    = getApiBase()
+
+// ─── Связь с сообщением чата ─────────────────────────────
+const sourceExpanded = ref(false)
+const sourceView = computed(() => {
+  const c = card.value
+  if (!c || (!c.source_message && !c.source_snapshot && !c.source_channel_id)) return null
+  const m = c.source_message
+  const s = m || c.source_snapshot || {}
+  return {
+    deleted:     !m,
+    channelName: s.channel_name || 'канал',
+    channelIcon: s.channel_icon || '',
+    inThread:    !!s.parent_id,
+    replies:     m?.reply_count || 0,
+    author:      s.user_name || (m ? 'Без имени' : 'Сообщение удалено'),
+    avatar:      s.user_avatar || '💬',
+    color:       s.user_color || '#8a8f98',
+    text:        (s.text || '').trim(),
+    attachment:  m?.attachment?.name || c.source_snapshot?.attachment_name || '',
+    date:        s.created_at ? formatSourceDate(s.created_at) : '',
+  }
+})
+const sourceLong = computed(() => {
+  const t = sourceView.value?.text || ''
+  return t.length > 360 || t.split('\n').length > 6
+})
+function formatSourceDate(ts) {
+  const d = typeof ts === 'number' ? new Date(ts > 1e12 ? ts : ts * 1000) : new Date(String(ts).replace(' ', 'T'))
+  if (isNaN(d)) return ''
+  return d.toLocaleString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+}
+function goToSourceMessage() {
+  const m = card.value?.source_message
+  if (!m) return
+  // Сообщение из треда — прыгаем к корню и открываем тред
+  if (m.parent_id) store.jumpToMessage(m.channel_id, m.parent_id, m.id)
+  else store.jumpToMessage(m.channel_id, m.id)
+  router.push(`/chat/${m.channel_id}`)
+}
 
 // ─── Сетевые запросы с обработкой ошибок ───────────────────
 const apiError = ref('')
@@ -1365,4 +1432,64 @@ onUnmounted(() => {
   .modal-footer { flex-direction: column; align-items: stretch; gap: 10px; }
   .modal-footer-right { justify-content: flex-end; }
 }
+
+/* ── Задача из чата ── */
+.chat-origin {
+  position: relative; margin: 14px 0 18px;
+  border: 1px solid var(--border); border-radius: var(--radius-lg, 12px);
+  background: linear-gradient(180deg, var(--accent-soft) 0%, transparent 75%), var(--surface);
+  overflow: hidden;
+  animation: coIn .35s var(--ease-out, ease) both;
+}
+.chat-origin::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--accent);
+}
+.chat-origin.deleted { background: var(--surface); }
+.chat-origin.deleted::before { background: var(--text-faint); }
+.co-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 14px 0 16px;
+  font-size: var(--text-xs, .75rem); color: var(--text-muted);
+}
+.co-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px;
+  background: var(--accent); color: #fff; font-weight: 700;
+}
+.chat-origin.deleted .co-badge { background: var(--surface-3, var(--border)); color: var(--text-muted); }
+.co-channel { font-weight: 600; color: var(--text); }
+.co-tag { padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); }
+.co-date { margin-left: auto; color: var(--text-faint); }
+.co-msg { display: flex; gap: 10px; padding: 12px 14px 4px 16px; }
+.co-avatar {
+  width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: .95rem;
+}
+.co-body { min-width: 0; flex: 1; }
+.co-author { font-weight: 700; font-size: var(--text-sm, .85rem); margin-bottom: 2px; }
+.co-text { white-space: pre-wrap; word-break: break-word; line-height: 1.5; color: var(--text); }
+.co-text.clamped {
+  display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, #000 65%, transparent);
+  mask-image: linear-gradient(180deg, #000 65%, transparent);
+}
+.chat-origin.deleted .co-text { color: var(--text-muted); }
+.co-more { margin-top: 4px; font-size: var(--text-xs, .75rem); font-weight: 600; color: var(--accent); }
+.co-file {
+  margin-top: 6px; display: inline-flex; gap: 6px; align-items: center;
+  padding: 4px 8px; border-radius: var(--radius-md, 8px);
+  background: var(--surface-2, var(--bg)); font-size: var(--text-xs, .75rem); color: var(--text-muted);
+}
+.co-foot { display: flex; justify-content: flex-end; padding: 6px 10px 10px 16px; }
+.co-open {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: var(--radius-md, 8px);
+  font-size: var(--text-sm, .85rem); font-weight: 600; color: var(--accent);
+  transition: background .15s ease, gap .2s var(--ease-out, ease);
+}
+.co-open:hover { background: var(--accent-soft); gap: 10px; }
+.co-note { margin-right: auto; font-size: var(--text-xs, .75rem); color: var(--text-faint); font-style: italic; }
+@keyframes coIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .chat-origin { animation: none; } }
 </style>

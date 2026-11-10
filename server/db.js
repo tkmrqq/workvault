@@ -46,7 +46,6 @@ db.exec(`
     type        TEXT NOT NULL DEFAULT 'text',
     attachment  TEXT,
     link_meta   TEXT,
-    crm_done    INTEGER DEFAULT 0,
     edited      INTEGER DEFAULT 0,
     created_at  INTEGER DEFAULT (unixepoch()),
     updated_at  INTEGER DEFAULT (unixepoch())
@@ -171,6 +170,39 @@ try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN due_date INTEGER').run() }
 try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN done_at INTEGER').run() } catch { }
 try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN archived_at INTEGER').run() } catch { }
 try { db.prepare('ALTER TABLE kanban_subtasks ADD COLUMN description TEXT').run() } catch { }
+// Связь задачи с сообщением чата (/task, «Создать задачу» в ховер-меню).
+// ON DELETE SET NULL — удаление сообщения не должно ломаться из-за FK
+// (foreign_keys = ON), а source_channel_id без FK остаётся, чтобы карточка
+// могла показать «исходное сообщение удалено».
+try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN source_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL').run() } catch { }
+try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN source_channel_id INTEGER').run() } catch { }
+try { db.prepare('CREATE INDEX IF NOT EXISTS idx_kanban_cards_source_msg ON kanban_cards(source_message_id)').run() } catch { }
+// Колонка messages.crm_done — легаси от «Занести в CRM». В новых БД её больше
+// не создаём, в старых просто не используем (DROP COLUMN в SQLite не стоит риска).
+try { db.prepare('ALTER TABLE kanban_cards ADD COLUMN source_snapshot TEXT').run() } catch { }
+// Профиль: должность, часовой пояс и статус (со временем автосброса)
+for (const col of ['title TEXT', 'timezone TEXT', 'status_emoji TEXT', 'status_text TEXT', 'status_until INTEGER']) {
+  try { db.prepare(`ALTER TABLE users ADD COLUMN ${col}`).run() } catch { }
+}
+
+// Треды: ответ — обычное сообщение с parent_id. Треды плоские (как в Slack):
+// у ответа не бывает своих ответов. Удалили корень — удаляется и тред.
+try { db.prepare('ALTER TABLE messages ADD COLUMN parent_id INTEGER REFERENCES messages(id) ON DELETE CASCADE').run() } catch { }
+try { db.prepare('CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_id)').run() } catch { }
+
+// Опросы: варианты лежат JSON-ом в messages.poll ({ options: [...], multi }),
+// голоса — отдельной таблицей (option = индекс варианта)
+try { db.prepare('ALTER TABLE messages ADD COLUMN poll TEXT').run() } catch { }
+db.exec(`
+  CREATE TABLE IF NOT EXISTS poll_votes (
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    option     INTEGER NOT NULL,
+    created_at INTEGER DEFAULT (unixepoch()),
+    UNIQUE(message_id, user_id, option)
+  );
+  CREATE INDEX IF NOT EXISTS idx_poll_votes_msg ON poll_votes(message_id);
+`)
 
 // Дефолтная рабочая зона + привязка "старых" колонок без workspace_id
 const wsCount = db.prepare('SELECT COUNT(*) as c FROM kanban_workspaces').get().c
@@ -192,6 +224,11 @@ function publicUserSelect(where = '') {
       created_at,
       description,
       banner,
+      title,
+      timezone,
+      CASE WHEN status_until IS NULL OR status_until > unixepoch() THEN status_emoji END AS status_emoji,
+      CASE WHEN status_until IS NULL OR status_until > unixepoch() THEN status_text  END AS status_text,
+      CASE WHEN status_until IS NULL OR status_until > unixepoch() THEN status_until END AS status_until,
       role,
       CASE WHEN password_hash IS NOT NULL AND password_hash != '' THEN 1 ELSE 0 END as has_password
     FROM users
@@ -339,7 +376,177 @@ function updateFolders(folders) {
 }
 
 // ─── QUERIES ─────────────────────────────────────────────
+// ─── Связь сообщение ↔ задача ─────────────────────────────
+// Компактное представление задачи для чипа под сообщением
+function taskForMessage(messageId) {
+  return db.prepare(`
+    SELECT k.id, k.title, k.done_at, k.archived_at,
+           c.title as column_title, c.color as column_color, c.is_terminal, c.workspace_id
+    FROM kanban_cards k LEFT JOIN kanban_columns c ON k.column_id = c.id
+    WHERE k.source_message_id = ?
+    ORDER BY k.id DESC LIMIT 1
+  `).get(messageId) || null
+}
+
+// Сводка треда для корневого сообщения: сколько ответов, когда последний, кто отвечал
+function threadMeta(messageId) {
+  const agg = db.prepare('SELECT COUNT(*) as c, MAX(created_at) as last FROM messages WHERE parent_id = ?').get(messageId)
+  if (!agg.c) return { reply_count: 0, last_reply_at: null, reply_users: [] }
+  const users = db.prepare(`
+    SELECT u.id, u.name, u.avatar, u.color, MAX(m.id) as last_id
+    FROM messages m JOIN users u ON m.user_id = u.id
+    WHERE m.parent_id = ?
+    GROUP BY u.id ORDER BY last_id DESC LIMIT 3
+  `).all(messageId).map(({ last_id, ...u }) => u)
+  return { reply_count: agg.c, last_reply_at: agg.last, reply_users: users }
+}
+
+// Опрос для фронта: варианты + кто за какой проголосовал
+function pollFor(messageId, raw) {
+  let p
+  try { p = typeof raw === 'string' ? JSON.parse(raw) : raw } catch { return null }
+  if (!p?.options?.length) return null
+  const votes = db.prepare('SELECT option, user_id FROM poll_votes WHERE message_id = ? ORDER BY created_at').all(messageId)
+  return {
+    multi: !!p.multi,
+    options: p.options.map((text, i) => ({ text, user_ids: votes.filter(v => v.option === i).map(v => v.user_id) }))
+  }
+}
+
+// Клик по варианту: повторный клик снимает голос; в обычном опросе
+// новый выбор заменяет старый, в multi — добавляется к нему
+const votePoll = db.transaction((messageId, userId, option, multi) => {
+  const had = db.prepare('SELECT 1 FROM poll_votes WHERE message_id = ? AND user_id = ? AND option = ?').get(messageId, userId, option)
+  if (multi) {
+    if (had) db.prepare('DELETE FROM poll_votes WHERE message_id = ? AND user_id = ? AND option = ?').run(messageId, userId, option)
+    else db.prepare('INSERT INTO poll_votes (message_id, user_id, option) VALUES (?,?,?)').run(messageId, userId, option)
+  } else {
+    db.prepare('DELETE FROM poll_votes WHERE message_id = ? AND user_id = ?').run(messageId, userId)
+    if (!had) db.prepare('INSERT INTO poll_votes (message_id, user_id, option) VALUES (?,?,?)').run(messageId, userId, option)
+  }
+})
+
+function parseMessageRow(row) {
+  return {
+    ...row,
+    attachment: row.attachment ? JSON.parse(row.attachment) : null,
+    link_meta: row.link_meta ? JSON.parse(row.link_meta) : null,
+    poll: row.poll ? pollFor(row.id, row.poll) : null,
+    task: taskForMessage(row.id),
+    ...(row.parent_id ? {} : threadMeta(row.id)),
+    reactions: []  // реакции подтягиваются отдельно в server.js
+  }
+}
+
+const MESSAGE_SELECT = `SELECT m.*, u.name as user_name, u.avatar as user_avatar, u.color as user_color
+  FROM messages m JOIN users u ON m.user_id = u.id`
+
+// Снимок сообщения для карточки «из чата»: контекст остаётся, даже если
+// сообщение потом удалят из канала
+function messageSnapshot(id) {
+  const m = db.prepare(`
+    SELECT m.id, m.channel_id, m.parent_id, m.text, m.created_at, m.attachment,
+           u.name as user_name, u.avatar as user_avatar, u.color as user_color,
+           ch.name as channel_name, ch.icon as channel_icon
+    FROM messages m JOIN users u ON m.user_id = u.id
+    LEFT JOIN channels ch ON ch.id = m.channel_id
+    WHERE m.id = ?
+  `).get(id)
+  if (!m) return null
+  let attachment_name = null
+  try { attachment_name = m.attachment ? (JSON.parse(m.attachment)?.name || null) : null } catch { }
+  const { attachment, ...rest } = m
+  return { ...rest, attachment_name }
+}
+
+function setCardSourceSnapshot(cardId, snap) {
+  db.prepare('UPDATE kanban_cards SET source_snapshot=? WHERE id=?').run(snap ? JSON.stringify(snap) : null, cardId)
+}
+
+// ─── Ачивки ───
+// Считаются на лету из уже имеющихся данных — отдельной таблицы не нужно,
+// и всем старичкам они «выдадутся» задним числом. Чтобы добавить
+// новую — допиши строку сюда (и, если надо, метрику в SQL ниже).
+const ACHIEVEMENTS = [
+  { id: 'first',     emoji: '👋', title: 'Первое слово',    desc: 'Написать первое сообщение',             goal: 1,    value: s => s.messages },
+  { id: 'chatty',    emoji: '💬', title: 'Болтун',          desc: '500 сообщений',                        goal: 500,  value: s => s.messages },
+  { id: 'voice',     emoji: '🗣️', title: 'Голос команды',    desc: '5000 сообщений',                       goal: 5000, value: s => s.messages },
+  { id: 'threads',   emoji: '🧵', title: 'Мастер тредов',   desc: '50 ответов в тредах',                 goal: 50,   value: s => s.thread_replies },
+  { id: 'closer',    emoji: '✅', title: 'Закрыватель',      desc: 'Закрыть 10 задач',                    goal: 10,   value: s => s.tasks_done },
+  { id: 'hundred',   emoji: '🔥', title: 'Сотня',           desc: 'Закрыть 100 задач',                   goal: 100,  value: s => s.tasks_done },
+  { id: 'clean',     emoji: '🎯', title: 'Без хвостов',      desc: '10+ закрытых задач и ни одной открытой', goal: 10,   value: s => (s.tasks_open ? 0 : s.tasks_done) },
+  { id: 'chat2task', emoji: '📌', title: 'Из чата в дело',   desc: '10 твоих сообщений стали задачами',      goal: 10,   value: s => s.msg_tasks },
+  { id: 'soul',      emoji: '❤️', title: 'Душа компании',    desc: 'Получить 100 реакций от коллег',      goal: 100,  value: s => s.reactions_got },
+  { id: 'reactor',   emoji: '🎉', title: 'Реакционер',      desc: 'Поставить 200 реакций',                goal: 200,  value: s => s.reactions_given },
+  { id: 'archivist', emoji: '📎', title: 'Архивариус',      desc: 'Отправить 30 файлов',                 goal: 30,   value: s => s.attachments },
+  { id: 'owl',       emoji: '🦉', title: 'Сова',             desc: '20 сообщений с полуночи до 5 утра',   goal: 20,   value: s => s.night_messages },
+  { id: 'lark',      emoji: '🐦', title: 'Жаворонок',        desc: '20 сообщений с 5 до 8 утра',          goal: 20,   value: s => s.early_messages },
+  { id: 'veteran',   emoji: '🏛️', title: 'Старожил',         desc: 'Год в команде',                       goal: 365,  value: s => s.days_in_team }
+]
+
+// Смещение часового пояса юзера от UTC в секундах (на сейчас — для «Совы» сойдёт)
+function tzOffsetSec(tz) {
+  if (!tz) return 0
+  try {
+    const now = new Date()
+    const local = new Date(now.toLocaleString('en-US', { timeZone: tz }))
+    const utc   = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }))
+    return Math.round((local - utc) / 1000)
+  } catch { return 0 }
+}
+
+function getUserStats(id) {
+  const user = db.prepare('SELECT timezone, created_at FROM users WHERE id = ?').get(id) || {}
+  const hour = `CAST(strftime('%H', created_at + @off, 'unixepoch') AS INTEGER)`
+  const s = db.prepare(`
+    SELECT
+      (SELECT COUNT(*)        FROM messages     WHERE user_id = @id)                          AS messages,
+      (SELECT MAX(created_at) FROM messages     WHERE user_id = @id)                          AS last_message_at,
+      (SELECT COUNT(*)        FROM kanban_cards WHERE assignee_id = @id AND done_at IS NULL)     AS tasks_open,
+      (SELECT COUNT(*)        FROM kanban_cards WHERE assignee_id = @id AND done_at IS NOT NULL) AS tasks_done,
+      (SELECT COUNT(*) FROM messages WHERE user_id = @id AND parent_id IS NOT NULL)            AS thread_replies,
+      (SELECT COUNT(*) FROM messages WHERE user_id = @id AND attachment IS NOT NULL)           AS attachments,
+      (SELECT COUNT(*) FROM messages WHERE user_id = @id AND ${hour} < 5)                      AS night_messages,
+      (SELECT COUNT(*) FROM messages WHERE user_id = @id AND ${hour} BETWEEN 5 AND 7)          AS early_messages,
+      (SELECT COUNT(*) FROM reactions WHERE user_id = @id)                                     AS reactions_given,
+      (SELECT COUNT(*) FROM reactions r JOIN messages m ON m.id = r.message_id
+         WHERE m.user_id = @id AND r.user_id != @id)                                           AS reactions_got,
+      (SELECT COUNT(*) FROM kanban_cards c JOIN messages m ON m.id = c.source_message_id
+         WHERE m.user_id = @id)                                                                AS msg_tasks
+  `).get({ id, off: tzOffsetSec(user.timezone) })
+  s.days_in_team = user.created_at ? Math.max(0, Math.floor((Date.now() / 1000 - user.created_at) / 86400)) : 0
+
+  const achievements = ACHIEVEMENTS.map(a => {
+    const v = Number(a.value(s)) || 0
+    return { id: a.id, emoji: a.emoji, title: a.title, desc: a.desc, goal: a.goal, value: Math.min(v, a.goal), unlocked: v >= a.goal }
+  })
+  return { ...s, achievements }
+}
+
 module.exports = {
+  getUserStats,
+  pollFor,
+  votePoll,
+  setMessagePoll: (id, json) => db.prepare('UPDATE messages SET poll = ? WHERE id = ?').run(json, id),
+  taskForMessage,
+  messageSnapshot,
+  setCardSourceSnapshot,
+  threadMeta,
+
+  // Сообщение целиком (JSON распарсен, задача и сводка треда на месте)
+  getMessageFull: (id) => {
+    const row = db.prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(id)
+    return row ? parseMessageRow(row) : null
+  },
+
+  getReplies: (parentId) =>
+    db.prepare(`${MESSAGE_SELECT} WHERE m.parent_id = ? ORDER BY m.id ASC LIMIT 1000`).all(parentId).map(parseMessageRow),
+
+  getMessageById: (id) => db.prepare(`
+    SELECT m.*, u.name as user_name, u.avatar as user_avatar, u.color as user_color
+    FROM messages m JOIN users u ON m.user_id = u.id WHERE m.id = ?
+  `).get(id) || null,
+
   db,
 
   getUsers: () => db.prepare(`${publicUserSelect()} ORDER BY name`).all(),
@@ -402,22 +609,18 @@ module.exports = {
     const q = before
       ? db.prepare(`SELECT m.*, u.name as user_name, u.avatar as user_avatar, u.color as user_color
           FROM messages m JOIN users u ON m.user_id = u.id
-          WHERE m.channel_id = ? AND m.id < ?
+          WHERE m.channel_id = ? AND m.parent_id IS NULL AND m.id < ?
           ORDER BY m.id DESC LIMIT ?`)
         .all(channelId, before, limit)
       : db.prepare(`SELECT m.*, u.name as user_name, u.avatar as user_avatar, u.color as user_color
           FROM messages m JOIN users u ON m.user_id = u.id
-          WHERE m.channel_id = ?
+          WHERE m.channel_id = ? AND m.parent_id IS NULL
           ORDER BY m.id DESC LIMIT ?`)
         .all(channelId, limit)
 
     // ↓ ВОТ ЧТО НУЖНО ДОБАВИТЬ — парсим JSON поля
-    return q.reverse().map(row => ({
-      ...row,
-      attachment: row.attachment ? JSON.parse(row.attachment) : null,
-      link_meta: row.link_meta ? JSON.parse(row.link_meta) : null,
-      reactions: []  // реакции подтягиваются отдельно в server.js
-    }))
+    // Ответы тредов в ленту канала не попадают — только сводка под корнем
+    return q.reverse().map(parseMessageRow)
   },
 
   getReactions: (messageId) =>
@@ -429,9 +632,9 @@ module.exports = {
   // сериализация делается один раз, на вызывающей стороне (server.js), здесь
   // просто пишем как есть. Раньше linkMeta сериализовался второй раз прямо тут —
   // на выходе получался JSON-строка JSON-строки, и превью ссылок ломались.
-  createMessage: (channelId, userId, text, type = 'text', attachment = null, linkMeta = null) =>
-    db.prepare(`INSERT INTO messages (channel_id, user_id, text, type, attachment, link_meta)
-      VALUES (?,?,?,?,?,?)`).run(channelId, userId, text, type, attachment, linkMeta),
+  createMessage: (channelId, userId, text, type = 'text', attachment = null, linkMeta = null, parentId = null) =>
+    db.prepare(`INSERT INTO messages (channel_id, user_id, text, type, attachment, link_meta, parent_id)
+      VALUES (?,?,?,?,?,?,?)`).run(channelId, userId, text, type, attachment, linkMeta, parentId),
 
   editMessage: (id, text, userId) =>
     db.prepare(`UPDATE messages SET text=?, edited=1, updated_at=unixepoch()
@@ -522,14 +725,16 @@ module.exports = {
         ORDER BY k.archived_at DESC
       `).all(...colIds)
     },
-    createCard: (column_id, title, description, assignee_id, priority, due_date) => {
+    createCard: (column_id, title, description, assignee_id, priority, due_date, source = null) => {
       const pos = db.prepare('SELECT COUNT(*) as c FROM kanban_cards WHERE column_id=?').get(column_id).c
       const isTerminal = db.prepare('SELECT is_terminal FROM kanban_columns WHERE id=?').get(column_id)?.is_terminal
       const r = db.prepare(`
-        INSERT INTO kanban_cards (column_id, title, description, assignee_id, priority, position, due_date, done_at)
-        VALUES (?,?,?,?,?,?,?,?)
+        INSERT INTO kanban_cards (column_id, title, description, assignee_id, priority, position, due_date, done_at,
+                                  source_message_id, source_channel_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
       `).run(column_id, title, description || null, assignee_id || null, priority || 'medium', pos,
-        due_date || null, isTerminal ? Math.floor(Date.now() / 1000) : null)
+        due_date || null, isTerminal ? Math.floor(Date.now() / 1000) : null,
+        source?.message_id || null, source?.channel_id || null)
       return db.prepare(`
         SELECT k.*, u.name as assignee_name, u.avatar as assignee_avatar, u.color as assignee_color
         FROM kanban_cards k LEFT JOIN users u ON k.assignee_id = u.id WHERE k.id=?
@@ -586,6 +791,27 @@ module.exports = {
     deleteCard: (id) => {
       db.prepare('DELETE FROM kanban_cards WHERE id=?').run(id)
     },
+    // Колонка по умолчанию для задач из чата: первая колонка зоны
+    // (или первой зоны вообще, если зона не указана/не существует)
+    defaultColumn: (workspaceId) => {
+      const inWs = workspaceId
+        ? db.prepare('SELECT * FROM kanban_columns WHERE workspace_id=? ORDER BY position LIMIT 1').get(workspaceId)
+        : null
+      return inWs || db.prepare(`
+        SELECT c.* FROM kanban_columns c LEFT JOIN kanban_workspaces w ON w.id = c.workspace_id
+        ORDER BY w.id, c.position LIMIT 1
+      `).get() || null
+    },
+    getColumn: (id) => db.prepare('SELECT * FROM kanban_columns WHERE id=?').get(id) || null,
+    // Какие из карточек привязаны к сообщениям — чтобы обновить чипы в чате
+    linkedMessages: (cardIds) => {
+      const ids = (cardIds || []).map(Number).filter(Boolean)
+      if (!ids.length) return []
+      return db.prepare(`
+        SELECT id, source_message_id, source_channel_id FROM kanban_cards
+        WHERE source_message_id IS NOT NULL AND id IN (${ids.map(() => '?').join(',')})
+      `).all(...ids)
+    },
     archiveCard: (id) => db.prepare('UPDATE kanban_cards SET archived_at=? WHERE id=?').run(Math.floor(Date.now() / 1000), id),
     unarchiveCard: (id) => db.prepare('UPDATE kanban_cards SET archived_at=NULL WHERE id=?').run(id),
     // Автоархив: карточки, лежащие в терминальной колонке дольше ARCHIVE_AFTER_MS
@@ -627,6 +853,23 @@ module.exports = {
         WHERE s.card_id = ? ORDER BY s.position
       `).all(id)
       card.subtasks.forEach(s => { s.tags = tagsForSubtask(s.id) })
+      card.source_message = card.source_message_id ? (db.prepare(`
+        SELECT m.id, m.channel_id, m.parent_id, m.text, m.created_at, m.attachment,
+               u.name as user_name, u.avatar as user_avatar, u.color as user_color,
+               ch.name as channel_name, ch.icon as channel_icon
+        FROM messages m JOIN users u ON m.user_id = u.id
+        LEFT JOIN channels ch ON ch.id = m.channel_id
+        WHERE m.id = ?
+      `).get(card.source_message_id) || null) : null
+      if (card.source_message?.attachment) {
+        try { card.source_message.attachment = JSON.parse(card.source_message.attachment) } catch { card.source_message.attachment = null }
+      }
+      if (card.source_snapshot) {
+        try { card.source_snapshot = JSON.parse(card.source_snapshot) } catch { card.source_snapshot = null }
+      }
+      if (card.source_message && !card.source_message.parent_id) {
+        card.source_message.reply_count = threadMeta(card.source_message.id).reply_count
+      }
       return card
     },
     createSubtask: (card_id, title, assignee_id, priority, description) => {

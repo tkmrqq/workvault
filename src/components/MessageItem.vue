@@ -1,16 +1,17 @@
 <template>
-  <div class="msg-wrap" :class="{ own: isOwn, 'msg-enter': uiPreferences.animationsEnabled && store.isMessageEntering(msg.id) }">
+  <div class="msg-wrap" @contextmenu="onContextMenu" :data-msg-id="msg.id" :class="{ own: isOwn, 'msg-enter': uiPreferences.animationsEnabled && store.isMessageEntering(msg.id), flash: store.flashMsgId === msg.id, 'thread-open': !inThread && store.threadParentId === msg.id, 'mentions-me': mentionsMe }">
     <div class="msg-avatar"
       :style="{ background: msg.user_color + '22', color: msg.user_color }"
       @click="openProfile(msg.user_id)"
       style="cursor: pointer"
       :title="msg.user_name"
     >
-      {{ msg.user_avatar }}
+      <AvatarContent :value="msg.user_avatar" :name="msg.user_name" />
     </div>
     <div class="msg-body">
       <div class="msg-meta">
         <span class="msg-name" :style="{ color: msg.user_color }">{{ msg.user_name }}</span>
+        <span v-if="authorStatus" class="msg-status" :title="authorStatus.text || 'Статус'">{{ authorStatus.emoji || '💬' }}</span>
         <span class="msg-time">{{ formatTime(msg.created_at) }}</span>
         <span v-if="msg.edited" class="msg-edited">(ред.)</span>
       </div>
@@ -26,6 +27,29 @@
         <div class="edit-actions">
           <button class="edit-btn" @click="editing = false">Отмена</button>
           <button class="edit-btn accent" @click="submitEdit">Сохранить</button>
+        </div>
+      </div>
+
+      <!-- Poll -->
+      <div v-if="msg.poll" class="poll">
+        <div class="poll-meta">
+          <ListChecks :size="13" :stroke-width="2.2" />
+          Опрос · {{ msg.poll.multi ? 'можно несколько ответов' : 'один ответ' }}
+        </div>
+        <button v-for="(o, i) in msg.poll.options" :key="i" type="button" class="poll-opt"
+          :class="{ mine: o.user_ids.includes(store.user?.id) }"
+          :title="o.user_ids.length ? pollVoters(o) : 'Пока никто'"
+          :aria-pressed="o.user_ids.includes(store.user?.id)"
+          @click="store.votePoll(msg.id, i)">
+          <span class="po-fill" :style="{ transform: `scaleX(${pollPct(o) / 100})` }" />
+          <span class="po-check" :class="{ square: msg.poll.multi }">
+            <Check v-if="o.user_ids.includes(store.user?.id)" :size="11" :stroke-width="3" />
+          </span>
+          <span class="po-text">{{ o.text }}</span>
+          <span class="po-pct">{{ pollPct(o) }}%</span>
+        </button>
+        <div class="poll-foot">
+          {{ pollTotal }} {{ votesWord(pollTotal) }}{{ pollMine ? ' · нажми ещё раз, чтобы снять голос' : '' }}
         </div>
       </div>
 
@@ -70,6 +94,25 @@
         </div>
       </div>
 
+      <!-- Привязанная задача с канбана -->
+      <Transition name="task-chip">
+        <button v-if="msg.task" type="button" class="task-chip"
+          :class="{ done: taskDone, archived: !!msg.task.archived_at }"
+          :style="{ '--chip-c': msg.task.column_color || 'var(--accent)' }"
+          title="Открыть задачу"
+          @click="openTask"
+        >
+          <span class="tc-icon">
+            <Check v-if="taskDone" :size="11" :stroke-width="3" />
+            <ListChecks v-else :size="11" :stroke-width="2.4" />
+          </span>
+          <span class="tc-title">{{ msg.task.title }}</span>
+          <Transition name="tc-swap" mode="out-in">
+            <span :key="taskStatus" class="tc-status">{{ taskStatus }}</span>
+          </Transition>
+        </button>
+      </Transition>
+
       <!-- Reactions -->
       <div v-if="msg.reactions?.length" class="reactions">
         <button v-for="group in groupedReactions" :key="group.emoji"
@@ -78,11 +121,31 @@
           @click="store.toggleReaction(msg.id, group.emoji)"
         >{{ group.emoji }} <span class="reaction-count">{{ group.count }}</span></button>
       </div>
+
+      <!-- Сводка треда -->
+      <Transition name="task-chip">
+        <button v-if="!inThread && msg.reply_count" type="button" class="thread-summary"
+          :class="{ active: store.threadParentId === msg.id }"
+          @click="store.openThread(msg.id)"
+        >
+          <span class="ts-avatars">
+            <span v-for="u in msg.reply_users || []" :key="u.id" class="ts-av"
+              :style="{ background: u.color + '22', color: u.color }" :title="u.name"><AvatarContent :value="u.avatar" :name="u.name" /></span>
+          </span>
+          <Transition name="tc-swap" mode="out-in">
+            <span :key="msg.reply_count" class="ts-count">{{ replyLabel }}</span>
+          </Transition>
+          <span class="ts-last">{{ lastReplyLabel }}</span>
+          <ChevronRight class="ts-go" :size="13" :stroke-width="2.4" />
+        </button>
+      </Transition>
     </div>
 
     <!-- Actions -->
     <div class="msg-actions">
       <button class="act-btn" title="Реакция" @click.stop="showPicker = !showPicker"><SmilePlus :size="15" :stroke-width="2" /></button>
+      <button v-if="!inThread" class="act-btn" title="Ответить в треде" @click="store.openThread(msg.id)"><MessagesSquare :size="15" :stroke-width="2" /></button>
+      <button v-if="!msg.task" class="act-btn" title="Создать задачу" :disabled="creatingTask" @click="makeTask"><ListPlus :size="15" :stroke-width="2" /></button>
       <button v-if="isOwn" class="act-btn" title="Редактировать" @click="startEdit"><Pencil :size="14" :stroke-width="2" /></button>
       <button v-if="isOwn" class="act-btn red" title="Удалить" @click="store.deleteMessage(msg.id)"><Trash2 :size="14" :stroke-width="2" /></button>
     </div>
@@ -102,12 +165,14 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { getApiBase } from '@/lib/apiBase'
 import { uiPreferences } from '@/composables/useUiPreferences'
+import { openContextMenu, shouldUseNativeMenu, copyText } from '@/composables/useContextMenu'
 import ProfileModal from './ProfileModal.vue'
 import {
-  Download, SmilePlus, Pencil, Trash2,
+  Download, SmilePlus, Pencil, Trash2, ListPlus, ListChecks, Check, MessagesSquare, ChevronRight, Copy, AtSign, User,
   FileArchive, FileText, FileSpreadsheet, Music, Film, Image as ImageIcon, File as FileIcon
 } from 'lucide-vue-next'
 
@@ -127,9 +192,11 @@ async function openProfile(userId) {
   }
 }
 
-const props = defineProps({ msg: Object })
+// inThread — сообщение рисуется внутри панели треда (без кнопки «Ответить в треде» и сводки)
+const props = defineProps({ msg: Object, inThread: { type: Boolean, default: false } })
 const emit  = defineEmits(['open-image'])
 const store = useAppStore()
+const router = useRouter()
 
 const editing    = ref(false)
 const editText   = ref('')
@@ -147,6 +214,28 @@ function resolveUrl(url) {
 
 const attachUrl = computed(() => resolveUrl(props.msg.attachment?.url))
 const isOwn     = computed(() => props.msg.user_id === store.user?.id)
+
+// ── Опрос ── (процент — от числа проголосовавших людей, как в Телеграме)
+const pollTotal = computed(() => {
+  const s = new Set()
+  for (const o of props.msg.poll?.options || []) o.user_ids.forEach(id => s.add(id))
+  return s.size
+})
+const pollMine = computed(() => (props.msg.poll?.options || []).some(o => o.user_ids.includes(store.user?.id)))
+function pollPct(o) { return pollTotal.value ? Math.round(o.user_ids.length / pollTotal.value * 100) : 0 }
+function pollVoters(o) { return o.user_ids.map(id => store.usersById?.[id]?.name || 'кто-то').join(', ') }
+function votesWord(n) {
+  const a = n % 100, b = n % 10
+  if (a > 10 && a < 20) return 'голосов'
+  if (b === 1) return 'голос'
+  if (b > 1 && b < 5) return 'голоса'
+  return 'голосов'
+}
+const authorStatus = computed(() => {
+  const u = store.usersById?.[props.msg.user_id]
+  return store.statusActive(u) ? { emoji: u.status_emoji, text: u.status_text || '' } : null
+})
+const mentionsMe = computed(() => !isOwn.value && store.mentionsMe(props.msg.text))
 
 const parsedLinkMeta = computed(() => {
   const m = props.msg.link_meta
@@ -226,6 +315,16 @@ function formatSize(bytes) {
 
 function renderText(text) {
   if (!text) return ''
+  return highlightMentions(baseRender(text))
+}
+// @упоминания подсвечиваем уже в готовом (экранированном) HTML
+function highlightMentions(html) {
+  const re = store.mentionRegex
+  if (!re) return html
+  return html.replace(re, (_, pre, name) =>
+    `${pre}<span class="mention${name === store.myMentionName ? ' me' : ''}">@${name}</span>`)
+}
+function baseRender(text) {
   return text
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
@@ -235,12 +334,80 @@ function renderText(text) {
     .replace(/\n/g, '<br>')
 }
 
+// ─── Сводка треда ────────────────────────────────────────
+function plural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100
+  if (m10 === 1 && m100 !== 11) return one
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few
+  return many
+}
+const replyLabel = computed(() => {
+  const n = props.msg.reply_count || 0
+  return `${n} ${plural(n, 'ответ', 'ответа', 'ответов')}`
+})
+const lastReplyLabel = computed(() => {
+  const ts = props.msg.last_reply_at
+  if (!ts) return ''
+  const diff = Math.floor(Date.now() / 1000) - ts
+  if (diff < 60)    return 'только что'
+  if (diff < 3600)  return `${Math.floor(diff / 60)} мин назад`
+  if (diff < 86400) return `${Math.floor(diff / 3600)} ч назад`
+  return 'последний ' + new Date(ts * 1000).toLocaleDateString('ru', { day: 'numeric', month: 'short' })
+})
+
+// ─── Сообщение ↔ задача ──────────────────────────────────
+const creatingTask = ref(false)
+const taskDone   = computed(() => !!props.msg.task?.is_terminal)
+const taskStatus = computed(() => {
+  const t = props.msg.task
+  if (!t) return ''
+  if (t.archived_at) return 'В архиве'
+  return t.column_title || 'Задача'
+})
+async function makeTask() {
+  if (creatingTask.value) return
+  creatingTask.value = true
+  try {
+    await store.createTaskFromMessage(props.msg.id)
+  } catch (e) {
+    alert(e.message || 'Не удалось создать задачу')
+  } finally {
+    creatingTask.value = false
+  }
+}
+function openTask() {
+  if (props.msg.task?.id) router.push(`/kanban/${props.msg.task.id}`)
+}
+
 function startEdit() { editText.value = props.msg.text || ''; editing.value = true }
 function submitEdit() {
   if (editText.value.trim()) store.editMessage(props.msg.id, editText.value.trim())
   editing.value = false
 }
 function pick(emoji) { store.toggleReaction(props.msg.id, emoji); showPicker.value = false }
+
+// ПКМ по сообщению: своё меню (и в браузере, и в Electron). Для ссылок, картинок,
+// выделенного текста и по Shift+ПКМ остаётся системное меню.
+function onContextMenu(e) {
+  if (editing.value || shouldUseNativeMenu(e)) return
+  e.preventDefault()
+  const m = props.msg
+  const own = isOwn.value
+  openContextMenu(e, [
+    { type: 'reactions', emojis: EMOJIS.slice(0, 6), action: em => store.toggleReaction(m.id, em) },
+    !props.inThread && { label: 'Ответить в треде', icon: MessagesSquare, action: () => store.openThread(m.id) },
+    m.task
+      ? { label: 'Открыть задачу', icon: ListChecks, action: openTask }
+      : { label: 'Создать задачу', icon: ListPlus, action: makeTask, disabled: creatingTask.value },
+    !own && { label: 'Упомянуть автора', icon: AtSign,
+      action: () => store.insertIntoComposer('@' + m.user_name + ' ', props.inThread ? (m.parent_id || m.id) : null) },
+    m.text && { label: 'Копировать текст', icon: Copy, action: () => copyText(m.text) },
+    { label: 'Профиль автора', icon: User, action: () => openProfile(m.user_id) },
+    own && { type: 'separator' },
+    own && { label: 'Редактировать', icon: Pencil, action: startEdit },
+    own && { label: 'Удалить', icon: Trash2, danger: true, action: () => store.deleteMessage(m.id) },
+  ])
+}
 </script>
 
 <style scoped>
@@ -258,6 +425,105 @@ function pick(emoji) { store.toggleReaction(props.msg.id, emoji); showPicker.val
   to { opacity: 1; transform: translateY(0); }
 }
 .msg-wrap:hover { background: var(--surface); }
+
+/* Подсветка при переходе «к исходному сообщению» из карточки */
+.msg-wrap.flash { animation: msgFlash 2.2s var(--ease-out, ease) both; }
+@keyframes msgFlash {
+  0%, 35% { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+  100%    { background: transparent;        box-shadow: inset 3px 0 0 transparent; }
+}
+
+/* Корень открытого сейчас треда */
+.msg-wrap.thread-open { background: var(--accent-soft); }
+
+/* ── Упоминания ── */
+.msg-wrap.mentions-me {
+  background: color-mix(in srgb, var(--warning, #f5a524) 8%, transparent);
+  box-shadow: inset 3px 0 0 var(--warning, #f5a524);
+}
+.msg-text :deep(.mention) {
+  padding: 0 4px; border-radius: 5px;
+  background: var(--accent-soft); color: var(--accent);
+  font-weight: 600; white-space: nowrap;
+}
+.msg-text :deep(.mention.me) {
+  background: color-mix(in srgb, var(--warning, #f5a524) 26%, transparent);
+  color: var(--text);
+}
+
+/* ── Сводка треда ── */
+.thread-summary {
+  display: flex; align-items: center; gap: 8px;
+  width: fit-content; max-width: 100%; margin-top: 6px;
+  padding: 3px 8px 3px 3px;
+  border: 1px solid transparent; border-radius: var(--radius-md);
+  font-size: var(--text-xs); color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--dur-fast, .15s) var(--ease-out, ease),
+              border-color var(--dur-fast, .15s) var(--ease-out, ease);
+}
+.thread-summary:hover, .thread-summary.active {
+  background: var(--surface-2, var(--surface)); border-color: var(--border);
+}
+.ts-avatars { display: flex; }
+.ts-av {
+  width: 20px; height: 20px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; box-shadow: 0 0 0 2px var(--bg);
+}
+.ts-av + .ts-av { margin-left: -4px; }
+.ts-count { font-weight: 700; color: var(--accent); }
+.ts-last  { color: var(--text-faint); white-space: nowrap; }
+.ts-go {
+  color: var(--text-faint); opacity: 0; transform: translateX(-4px);
+  transition: opacity var(--dur-fast, .15s) ease, transform var(--dur, .25s) var(--ease-out, ease);
+}
+.thread-summary:hover .ts-go, .thread-summary.active .ts-go { opacity: 1; transform: none; }
+
+/* ── Чип привязанной задачи ── */
+.task-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 100%; margin-top: 6px;
+  padding: 3px 10px 3px 4px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--chip-c) 35%, transparent);
+  background: color-mix(in srgb, var(--chip-c) 12%, transparent);
+  font-size: var(--text-xs); color: var(--text);
+  cursor: pointer;
+  transition: background var(--dur-fast, .15s) var(--ease-out, ease),
+              border-color var(--dur-fast, .15s) var(--ease-out, ease),
+              transform var(--dur-fast, .15s) var(--ease-out, ease);
+}
+.task-chip:hover {
+  background: color-mix(in srgb, var(--chip-c) 22%, transparent);
+  border-color: color-mix(in srgb, var(--chip-c) 60%, transparent);
+  transform: translateY(-1px);
+}
+.task-chip:active { transform: translateY(0) scale(.98); }
+.tc-icon {
+  width: 18px; height: 18px; flex-shrink: 0; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--chip-c); color: #fff;
+  transition: transform var(--dur, .25s) var(--ease-spring, ease);
+}
+.task-chip:hover .tc-icon { transform: rotate(-8deg) scale(1.08); }
+.tc-title {
+  font-weight: 600; min-width: 0; max-width: 340px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tc-status { color: var(--text-muted); white-space: nowrap; }
+.tc-status::before { content: '·'; margin-right: 6px; color: var(--text-faint); }
+.task-chip.done .tc-title { text-decoration: line-through; color: var(--text-muted); }
+.task-chip.archived { opacity: .6; }
+
+.task-chip-enter-active { transition: opacity var(--dur, .25s) var(--ease-out, ease), transform var(--dur-slow, .35s) var(--ease-spring, ease); }
+.task-chip-leave-active { transition: opacity var(--dur-fast, .15s) ease, transform var(--dur-fast, .15s) ease; }
+.task-chip-enter-from   { opacity: 0; transform: translateY(4px) scale(.9); }
+.task-chip-leave-to     { opacity: 0; transform: scale(.95); }
+
+.tc-swap-enter-active, .tc-swap-leave-active { transition: opacity var(--dur-fast, .15s) ease, transform var(--dur-fast, .15s) var(--ease-out, ease); }
+.tc-swap-enter-from { opacity: 0; transform: translateY(5px); }
+.tc-swap-leave-to   { opacity: 0; transform: translateY(-5px); }
 .msg-wrap:hover .msg-actions { opacity: 1; pointer-events: all; }
 
 .msg-avatar {
@@ -270,8 +536,54 @@ function pick(emoji) { store.toggleReaction(props.msg.id, emoji); showPicker.val
 .msg-name { font-size: var(--text-sm); font-weight: 700; }
 .msg-time { font-size: var(--text-xs); color: var(--text-faint); }
 .msg-edited { font-size: 10px; color: var(--text-faint); }
+.msg-status { font-size: 13px; line-height: 1; cursor: default; }
 
 .msg-text { font-size: var(--text-sm); line-height: 1.6; color: var(--text); word-break: break-word; }
+
+/* Опрос */
+.poll {
+  max-width: 420px; margin-top: 6px; padding: 10px;
+  display: flex; flex-direction: column; gap: 6px;
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--surface-2);
+}
+.poll-meta {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--text-faint);
+}
+.poll-opt {
+  position: relative; overflow: hidden;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text); font-size: var(--text-sm); text-align: left;
+  cursor: pointer;
+  transition: border-color .15s ease;
+}
+.poll-opt:hover { border-color: color-mix(in oklab, var(--accent) 50%, var(--border)); }
+.poll-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.po-fill {
+  position: absolute; inset: 0;
+  transform-origin: left; pointer-events: none;
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
+  transition: transform .45s var(--ease-out, ease);
+}
+.poll-opt.mine .po-fill { background: color-mix(in oklab, var(--accent) 28%, transparent); }
+.po-check {
+  position: relative; flex: none;
+  width: 16px; height: 16px;
+  display: grid; place-items: center;
+  border: 1.5px solid var(--text-faint); border-radius: 50%;
+  color: #fff;
+}
+.po-check.square { border-radius: 4px; }
+.poll-opt.mine .po-check { background: var(--accent); border-color: var(--accent); }
+.po-text { position: relative; flex: 1; min-width: 0; word-break: break-word; }
+.po-pct { position: relative; flex: none; font-size: 12px; font-weight: 600; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.poll-foot { font-size: 11px; color: var(--text-faint); }
+@media (prefers-reduced-motion: reduce) { .po-fill { transition: none; } }
 .msg-text :deep(code) {
   font-family: var(--font-mono, monospace); font-size: .85em;
   background: var(--surface-3); padding: 1px 5px;

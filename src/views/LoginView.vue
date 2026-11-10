@@ -30,7 +30,7 @@
             class="user-btn"
             @click="pickUser(u)"
           >
-            <span class="avatar" :style="{ background: u.color + '22', color: u.color }">{{ u.avatar }}</span>
+            <span class="avatar" :style="{ background: u.color + '22', color: u.color }"><AvatarContent :value="u.avatar" :name="u.name" /></span>
             <span class="uname">{{ u.name }}</span>
             <span v-if="!u.has_password" class="badge-nopass">нет пароля</span>
             <ChevronRight class="arrow" :size="15" :stroke-width="2" />
@@ -56,7 +56,7 @@
 
         <div class="pin-profile">
           <span class="avatar-lg" :style="{ background: selectedUser.color + '22', color: selectedUser.color }">
-            {{ selectedUser.avatar }}
+            <AvatarContent :value="selectedUser.avatar" :name="selectedUser.name" />
           </span>
           <span class="pin-name">{{ selectedUser.name }}</span>
         </div>
@@ -88,7 +88,7 @@
 
         <div class="pin-profile">
           <span class="avatar-lg" :style="{ background: selectedUser.color + '22', color: selectedUser.color }">
-            {{ selectedUser.avatar }}
+            <AvatarContent :value="selectedUser.avatar" :name="selectedUser.name" />
           </span>
           <span class="pin-name">{{ selectedUser.name }}</span>
         </div>

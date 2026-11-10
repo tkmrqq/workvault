@@ -24,9 +24,12 @@
 
     <div class="user-badge" @click="showProfile = true" title="Настройки профиля">
       <span class="avatar-sm" :style="{ background: store.user?.color + '22', color: store.user?.color }">
-        {{ store.user?.avatar }}
+        <AvatarContent :value="store.user?.avatar" :name="store.user?.name" />
       </span>
-      <span class="user-name">{{ store.user?.name }}</span>
+      <span class="user-meta">
+        <span class="user-name">{{ store.user?.name }}</span>
+        <span v-if="store.myStatusLine" class="user-status">{{ store.myStatusLine }}</span>
+      </span>
       <span class="online-dot" title="Онлайн" />
     </div>
 
@@ -292,4 +295,7 @@ function onlineInChannel(channelId) {
 .sidebar-backdrop-fade-enter-active, .sidebar-backdrop-fade-leave-active { transition: opacity .2s ease; }
 .sidebar-backdrop-fade-enter-from, .sidebar-backdrop-fade-leave-to { opacity: 0; }
 
+.user-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
+.user-meta .user-name { flex: none; }
+.user-status { font-size: 11px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

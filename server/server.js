@@ -252,6 +252,64 @@ app.get('/api/messages/:channelId', (req, res) => {
   }
 })
 
+// ─── СООБЩЕНИЕ → ЗАДАЧА ───────────────────────────────────
+// Одна задача на сообщение: повторный вызов вернёт уже созданную.
+function taskTitleFromMessage(msg) {
+  const firstLine = (msg.text || '').split('\n').map(l => l.trim()).find(Boolean)
+  if (firstLine) return firstLine.length > 120 ? firstLine.slice(0, 117) + '…' : firstLine
+  if (msg.attachment) {
+    try { return 'Файл: ' + (JSON.parse(msg.attachment).name || 'вложение') } catch { }
+  }
+  return 'Задача из чата'
+}
+
+// ─── ТРЕДЫ ──────────────────────────────────────────────────
+app.get('/api/messages/:id/thread', (req, res) => {
+  try {
+    let parent = db.getMessageFull(Number(req.params.id))
+    if (parent?.parent_id) parent = db.getMessageFull(parent.parent_id) // открыли ответ — показываем весь тред
+    if (!parent) return res.status(404).json({ error: 'Сообщение не найдено' })
+    res.json({
+      parent:  withReactions(parent),
+      replies: db.getReplies(parent.id).map(withReactions)
+    })
+  } catch (e) {
+    console.error('thread error:', e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/api/messages/:id/task', (req, res) => {
+  try {
+    const msg = db.getMessageById(Number(req.params.id))
+    if (!msg) return res.status(404).json({ error: 'Сообщение не найдено' })
+
+    const existing = db.taskForMessage(msg.id)
+    if (existing) return res.json({ ...existing, existed: true })
+
+    const { title, workspace_id, column_id } = req.body || {}
+    const column = column_id ? db.kanban.getColumn(Number(column_id)) : db.kanban.defaultColumn(Number(workspace_id) || null)
+    if (!column) return res.status(400).json({ error: 'На канбане нет колонок' })
+
+    const cardTitle = (title && String(title).trim()) ? String(title).trim().slice(0, 200) : taskTitleFromMessage(msg)
+    // Текст сообщения в описание больше не копируем: в карточке есть блок
+    // «Из чата», а снимок сообщения сохраняем отдельно (на случай удаления)
+    const description = ''
+
+    db.kanban.createCard(column.id, cardTitle, description, null, 'medium', null,
+      { message_id: msg.id, channel_id: msg.channel_id })
+
+    emitBoardUpdate(column.workspace_id)
+    const task = db.taskForMessage(msg.id)
+    if (task?.id) db.setCardSourceSnapshot(task.id, db.messageSnapshot(msg.id))
+    io.to(`channel:${msg.channel_id}`).emit('message:task', { messageId: msg.id, task })
+    res.json(task)
+  } catch (e) {
+    console.error('message→task error:', e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ─── UPLOAD ───────────────────────────────────────────────
 app.post('/api/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Файл не получен' })
@@ -325,6 +383,18 @@ function emitBoardUpdate(workspaceId) {
   io.emit('kanban:update', { workspace_id: Number(workspaceId) || null, board: db.kanban.getBoard(workspaceId) })
 }
 
+// Обновляем чипы задач под сообщениями в чате (статус/колонка/архив/удаление).
+// links — результат db.kanban.linkedMessages(), берём его ДО удаления карточки.
+function emitTaskLinks(links) {
+  for (const l of links || []) {
+    io.to(`channel:${l.source_channel_id}`).emit('message:task', {
+      messageId: l.source_message_id,
+      task: db.taskForMessage(l.source_message_id)
+    })
+  }
+}
+const emitTasksForCards = (ids) => emitTaskLinks(db.kanban.linkedMessages(ids))
+
 app.get('/api/kanban', (req, res) => {
   res.json(db.kanban.getBoard(req.query.workspace_id ? Number(req.query.workspace_id) : null))
 })
@@ -345,6 +415,7 @@ app.patch('/api/kanban/cards/:id', (req, res) => {
   const { workspace_id, ...rest } = req.body
   const card = db.kanban.updateCard(req.params.id, rest)
   emitBoardUpdate(workspace_id)
+  emitTasksForCards([req.params.id])
   res.json(card)
 })
 
@@ -357,6 +428,7 @@ app.post('/api/kanban/cards/:id/move', (req, res) => {
   // должно обновиться содержимое для всех, кто сейчас на них смотрит
   emitBoardUpdate(result.oldWorkspaceId)
   if (result.newWorkspaceId !== result.oldWorkspaceId) emitBoardUpdate(result.newWorkspaceId)
+  emitTasksForCards([req.params.id])
   res.json(result.card)
 })
 
@@ -365,24 +437,29 @@ app.post('/api/kanban/cards/reorder', (req, res) => {
   const { workspace_id, cards } = Array.isArray(req.body) ? { workspace_id: null, cards: req.body } : req.body
   db.kanban.reorderCards(cards)
   emitBoardUpdate(workspace_id)
+  emitTasksForCards((cards || []).map(c => c.id))
   res.json({ ok: true })
 })
 
 app.delete('/api/kanban/cards/:id', (req, res) => {
+  const links = db.kanban.linkedMessages([req.params.id])
   db.kanban.deleteCard(req.params.id)
   emitBoardUpdate(req.query.workspace_id)
+  emitTaskLinks(links)
   res.json({ ok: true })
 })
 
 app.post('/api/kanban/cards/:id/archive', (req, res) => {
   db.kanban.archiveCard(req.params.id)
   emitBoardUpdate(req.body?.workspace_id)
+  emitTasksForCards([req.params.id])
   res.json({ ok: true })
 })
 
 app.post('/api/kanban/cards/:id/unarchive', (req, res) => {
   db.kanban.unarchiveCard(req.params.id)
   emitBoardUpdate(req.body?.workspace_id)
+  emitTasksForCards([req.params.id])
   res.json({ ok: true })
 })
 
@@ -521,22 +598,49 @@ io.on('connection', (socket) => {
   // на клиенте). Так фронт узнаёт результат отправки напрямую по этому конкретному
   // сообщению, а не гадает по общему socket.on('error') (который раньше вообще
   // никто не слушал — сообщение просто пропадало без следа при любой ошибке).
-  socket.on('message:send', ({ channelId, text, attachment, linkMeta }, ack) => {
+  socket.on('message:send', ({ channelId, text, attachment, linkMeta, parentId, poll }, ack) => {
     try {
-      const type = attachment ? (attachment.isImage ? 'image' : 'file') : 'text'
+      // Ответ в треде: корень должен быть в том же канале; ответ на ответ
+      // поднимаем до корня — треды плоские
+      let parent = null
+      if (parentId) {
+        parent = db.getMessageById(Number(parentId))
+        if (parent?.parent_id) parent = db.getMessageById(parent.parent_id)
+        if (!parent || parent.channel_id !== Number(channelId)) {
+          ack?.({ ok: false, error: 'Тред не найден — возможно, сообщение удалили' })
+          return
+        }
+      }
+      // Опрос: текст сообщения = вопрос, от 2 до 10 уникальных вариантов, без файлов
+      let pollJson = null
+      if (poll) {
+        const options = [...new Set((Array.isArray(poll.options) ? poll.options : [])
+          .map(o => String(o ?? '').trim().slice(0, 100)).filter(Boolean))]
+        if (!String(text || '').trim() || attachment || options.length < 2 || options.length > 10) {
+          ack?.({ ok: false, error: 'Опросу нужен вопрос и от 2 до 10 вариантов' })
+          return
+        }
+        pollJson = JSON.stringify({ options, multi: !!poll.multi })
+      }
+      const type = pollJson ? 'poll' : attachment ? (attachment.isImage ? 'image' : 'file') : 'text'
       const result = db.createMessage(
         channelId, socket.user.id, text || null, type,
         attachment ? JSON.stringify(attachment) : null,
-        linkMeta ? JSON.stringify(linkMeta) : null
+        linkMeta ? JSON.stringify(linkMeta) : null,
+        parent?.id || null
       )
-      // getMessages парсит JSON — берём последнее сообщение по id
-      const msgs = db.getMessages(channelId, 1)
-      const msg = msgs.find(m => m.id === result.lastInsertRowid)
+      if (pollJson) db.setMessagePoll(result.lastInsertRowid, pollJson)
+      const msg = db.getMessageFull(result.lastInsertRowid)
       if (!msg) {
         ack?.({ ok: false, error: 'Сообщение не найдено после сохранения' })
         return
       }
-      io.to(`channel:${channelId}`).emit('message:new', withReactions(msg))
+      if (parent) {
+        io.to(`channel:${channelId}`).emit('thread:reply', withReactions(msg))
+        io.to(`channel:${channelId}`).emit('message:thread', { messageId: parent.id, ...db.threadMeta(parent.id) })
+      } else {
+        io.to(`channel:${channelId}`).emit('message:new', withReactions(msg))
+      }
       ack?.({ ok: true, id: msg.id })
     } catch (e) {
       console.error('message:send error:', e)
@@ -546,19 +650,41 @@ io.on('connection', (socket) => {
   })
 
   socket.on('message:edit', ({ messageId, text, channelId }) => {
-    db.editMessage(messageId, text, socket.user.id) // WHERE user_id=? в самом запросе — чужое не отредактирует
-    io.to(`channel:${channelId}`).emit('message:edited', { messageId, text })
+    const r = db.editMessage(messageId, text, socket.user.id) // WHERE user_id=? в самом запросе — чужое не отредактирует
+    // Раньше событие улетало всем даже если в БД ничего не поменялось
+    if (r.changes) io.to(`channel:${channelId}`).emit('message:edited', { messageId, text })
   })
 
   socket.on('message:delete', ({ messageId, channelId }) => {
-    db.deleteMessage(messageId, socket.user.id) // та же защита на уровне SQL
+    const before = db.getMessageById(messageId)
+    const r = db.deleteMessage(messageId, socket.user.id) // та же защита на уровне SQL
+    if (!r.changes) return
     io.to(`channel:${channelId}`).emit('message:deleted', { messageId })
+    // Удалили ответ — пересчитываем сводку треда под корнем
+    if (before?.parent_id) {
+      io.to(`channel:${channelId}`).emit('message:thread', { messageId: before.parent_id, ...db.threadMeta(before.parent_id) })
+    }
   })
 
   socket.on('reaction:toggle', ({ messageId, emoji, channelId }) => {
     db.toggleReaction(messageId, socket.user.id, emoji)
     const reactions = db.getReactions(messageId)
     io.to(`channel:${channelId}`).emit('reaction:update', { messageId, reactions })
+  })
+
+  // Голос в опросе. Канал берём из самого сообщения, а не с клиента
+  socket.on('poll:vote', ({ messageId, option }) => {
+    try {
+      const m = db.getMessageById(Number(messageId))
+      if (!m?.poll) return
+      const p = JSON.parse(m.poll)
+      const i = Number(option)
+      if (!Number.isInteger(i) || i < 0 || i >= p.options.length) return
+      db.votePoll(m.id, socket.user.id, i, !!p.multi)
+      io.to(`channel:${m.channel_id}`).emit('poll:update', { messageId: m.id, poll: db.pollFor(m.id, m.poll) })
+    } catch (e) {
+      console.error('poll:vote error:', e)
+    }
   })
 
   socket.on('typing:start', ({ channelId }) => {
@@ -595,6 +721,26 @@ app.patch('/api/users/:id', (req, res) => {
     return res.status(403).json({ error: 'Можно редактировать только свой профиль' })
   }
   const { name, avatar, color, description, banner } = req.body
+  // Баннер — только из известного списка (см. BANNERS в ProfileModal.vue), иначе в БД можно записать что угодно
+  // Или путь к своей картинке, загруженной через /banner, — и только к своей.
+  const ALLOWED_BANNERS = ['auto', 'violet', 'aurora', 'cosmos', 'ocean', 'forest', 'mint', 'sunset', 'peach', 'rose', 'mono']
+  const bannerIn = ALLOWED_BANNERS.includes(banner) || isOwnUpload(banner, 'banner', req.params.id) ? banner : null
+  const b = req.body || {}
+  // Аватар — либо эмодзи, либо путь к фото, загруженному через /avatar. Чужие URL не принимаем.
+  let avatarIn = typeof avatar === 'string' ? avatar.trim() : null
+  if (avatarIn && avatarIn.includes('/')) {
+    if (!isOwnUpload(avatarIn, 'avatar', req.params.id)) avatarIn = null
+  } else if (avatarIn) {
+    avatarIn = avatarIn.slice(0, 16)
+  }
+  const prev = db.getUserById(req.params.id)
+  const prevAvatar = prev?.avatar
+  const prevBanner = prev?.banner
+  const clip = (v, n) => (v == null ? null : (String(v).trim().slice(0, n) || null))
+  const validTz = (tz) => {
+    if (!tz) return null
+    try { new Intl.DateTimeFormat('en-US', { timeZone: String(tz) }); return String(tz) } catch { return null }
+  }
   try {
     db.db.prepare(`
       UPDATE users SET
@@ -604,13 +750,79 @@ app.patch('/api/users/:id', (req, res) => {
         description = COALESCE(?, description),
         banner      = COALESCE(?, banner)
       WHERE id = ?
-    `).run(name || null, avatar || null, color || null,
+    `).run(name || null, avatarIn || null, color || null,
       description !== undefined ? description : null,
-      banner || null, req.params.id)
-    res.json(db.getUserById(req.params.id))
+      bannerIn, req.params.id)
+
+    // Поля, которые можно и очистить — трогаем, только если они пришли в запросе
+    const sets = [], vals = []
+    if ('title' in b)    { sets.push('title = ?');    vals.push(clip(b.title, 40)) }
+    if ('timezone' in b) { sets.push('timezone = ?'); vals.push(validTz(b.timezone)) }
+    if ('status_text' in b || 'status_emoji' in b) {
+      const text  = clip(b.status_text, 80)
+      const emoji = clip(b.status_emoji, 16)
+      const until = Number(b.status_until) > 0 ? Math.floor(Number(b.status_until)) : null
+      sets.push('status_emoji = ?', 'status_text = ?', 'status_until = ?')
+      vals.push(emoji, text, (text || emoji) ? until : null)
+    }
+    if (sets.length) db.db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...vals, req.params.id)
+
+    const updated = db.getUserById(req.params.id)
+    // Остальные клиенты обновят имя/аватар/статус без перезагрузки
+    // Старое фото больше нигде не нужно — удаляем, чтобы не копить мусор в uploads
+    if (prevAvatar && prevAvatar !== updated?.avatar && prevAvatar.startsWith('/uploads/avatar-')) {
+      fs.unlink(path.join(UPLOADS_DIR, path.basename(prevAvatar)), () => {})
+    }
+    if (prevBanner && prevBanner !== updated?.banner && prevBanner.startsWith('/uploads/banner-')) {
+      fs.unlink(path.join(UPLOADS_DIR, path.basename(prevBanner)), () => {})
+    }
+    io.emit('user:updated', updated)
+    res.json(updated)
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
+})
+
+// ─── AVATAR / BANNER UPLOAD ─────────────────────────────
+// Клиент уже кадрирует и сжимает картинку (аватар 320×320, фон 1200×400),
+// поэтому лимит небольшой. В БД путь попадает только через PATCH /api/users/:id.
+const PROFILE_IMG_MIME = { 'image/webp': '.webp', 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif' }
+const profileImageUpload = (kind) => multer({
+  storage: multer.diskStorage({
+    destination: (_, __, cb) => cb(null, UPLOADS_DIR),
+    filename: (req, file, cb) => cb(null, `${kind}-${Number(req.params.id)}-${Date.now()}${PROFILE_IMG_MIME[file.mimetype] || '.png'}`)
+  }),
+  limits: { fileSize: 4 * 1024 * 1024, files: 1 },
+  fileFilter: (_, file, cb) => PROFILE_IMG_MIME[file.mimetype]
+    ? cb(null, true)
+    : cb(new Error('Нужна картинка: PNG, JPG, WebP или GIF'), false)
+})
+
+// Путь вида /uploads/<kind>-<userId>-<ts>.<ext>, загруженный именно этим юзером.
+// Чужой файл подставить нельзя — иначе при следующей смене мы бы его удалили.
+function isOwnUpload(v, kind, userId) {
+  return typeof v === 'string'
+    && new RegExp(`^/uploads/${kind}-${Number(userId)}-\\d+\\.(webp|png|jpg|gif)$`).test(v)
+}
+
+for (const [kind, label] of [['avatar', 'аватар'], ['banner', 'фон профиля']]) {
+  const uploader = profileImageUpload(kind)
+  app.post(`/api/users/:id/${kind}`, (req, res) => {
+    if (!req.user || (Number(req.params.id) !== req.user.id && req.user.role !== 'admin')) {
+      return res.status(403).json({ error: `Можно менять только свой ${label}` })
+    }
+    uploader.single('file')(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Файл больше 4 МБ' : err.message })
+      if (!req.file) return res.status(400).json({ error: 'Файл не получен' })
+      res.json({ url: `/uploads/${req.file.filename}` })
+    })
+  })
+}
+
+app.get('/api/users/:id/stats', (req, res) => {
+  const id = Number(req.params.id)
+  if (!id) return res.status(400).json({ error: 'Некорректный id' })
+  res.json(db.getUserStats(id))
 })
 
 app.get('/api/users/:id', (req, res) => {

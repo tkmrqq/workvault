@@ -10,7 +10,7 @@
         <div v-for="u in onlineHere" :key="u.userId" class="online-avatar"
           :style="{ background: getUserColor(u) + '22', color: getUserColor(u) }"
           :title="u.userName"
-        >{{ getUserAvatar(u) }}</div>
+        ><AvatarContent :value="store.usersById?.[u.userId]?.avatar || getUserAvatar(u)" :name="u.userName" /></div>
         <span class="ch-count">{{ onlineHere.length }} онлайн</span>
       </div>
     </div>
@@ -43,7 +43,7 @@ const filters = [
   { value: 'link',     icon: Link2,      label: 'Ссылки' },
 ]
 function getUserColor(u) {
-  return '#7c6af7'
+  return store.usersById?.[u.userId]?.color || '#7c6af7'
 }
 function getUserAvatar(u) {
   return u.userName?.[0]?.toUpperCase() || '?'
