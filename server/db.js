@@ -423,14 +423,64 @@ function setCardSourceSnapshot(cardId, snap) {
   db.prepare('UPDATE kanban_cards SET source_snapshot=? WHERE id=?').run(snap ? JSON.stringify(snap) : null, cardId)
 }
 
+// ─── Ачивки ───
+// Считаются на лету из уже имеющихся данных — отдельной таблицы не нужно,
+// и всем старичкам они «выдадутся» задним числом. Чтобы добавить
+// новую — допиши строку сюда (и, если надо, метрику в SQL ниже).
+const ACHIEVEMENTS = [
+  { id: 'first',     emoji: '👋', title: 'Первое слово',    desc: 'Написать первое сообщение',             goal: 1,    value: s => s.messages },
+  { id: 'chatty',    emoji: '💬', title: 'Болтун',          desc: '500 сообщений',                        goal: 500,  value: s => s.messages },
+  { id: 'voice',     emoji: '🗣️', title: 'Голос команды',    desc: '5000 сообщений',                       goal: 5000, value: s => s.messages },
+  { id: 'threads',   emoji: '🧵', title: 'Мастер тредов',   desc: '50 ответов в тредах',                 goal: 50,   value: s => s.thread_replies },
+  { id: 'closer',    emoji: '✅', title: 'Закрыватель',      desc: 'Закрыть 10 задач',                    goal: 10,   value: s => s.tasks_done },
+  { id: 'hundred',   emoji: '🔥', title: 'Сотня',           desc: 'Закрыть 100 задач',                   goal: 100,  value: s => s.tasks_done },
+  { id: 'clean',     emoji: '🎯', title: 'Без хвостов',      desc: '10+ закрытых задач и ни одной открытой', goal: 10,   value: s => (s.tasks_open ? 0 : s.tasks_done) },
+  { id: 'chat2task', emoji: '📌', title: 'Из чата в дело',   desc: '10 твоих сообщений стали задачами',      goal: 10,   value: s => s.msg_tasks },
+  { id: 'soul',      emoji: '❤️', title: 'Душа компании',    desc: 'Получить 100 реакций от коллег',      goal: 100,  value: s => s.reactions_got },
+  { id: 'reactor',   emoji: '🎉', title: 'Реакционер',      desc: 'Поставить 200 реакций',                goal: 200,  value: s => s.reactions_given },
+  { id: 'archivist', emoji: '📎', title: 'Архивариус',      desc: 'Отправить 30 файлов',                 goal: 30,   value: s => s.attachments },
+  { id: 'owl',       emoji: '🦉', title: 'Сова',             desc: '20 сообщений с полуночи до 5 утра',   goal: 20,   value: s => s.night_messages },
+  { id: 'lark',      emoji: '🐦', title: 'Жаворонок',        desc: '20 сообщений с 5 до 8 утра',          goal: 20,   value: s => s.early_messages },
+  { id: 'veteran',   emoji: '🏛️', title: 'Старожил',         desc: 'Год в команде',                       goal: 365,  value: s => s.days_in_team }
+]
+
+// Смещение часового пояса юзера от UTC в секундах (на сейчас — для «Совы» сойдёт)
+function tzOffsetSec(tz) {
+  if (!tz) return 0
+  try {
+    const now = new Date()
+    const local = new Date(now.toLocaleString('en-US', { timeZone: tz }))
+    const utc   = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }))
+    return Math.round((local - utc) / 1000)
+  } catch { return 0 }
+}
+
 function getUserStats(id) {
-  return db.prepare(`
+  const user = db.prepare('SELECT timezone, created_at FROM users WHERE id = ?').get(id) || {}
+  const hour = `CAST(strftime('%H', created_at + @off, 'unixepoch') AS INTEGER)`
+  const s = db.prepare(`
     SELECT
       (SELECT COUNT(*)        FROM messages     WHERE user_id = @id)                          AS messages,
       (SELECT MAX(created_at) FROM messages     WHERE user_id = @id)                          AS last_message_at,
       (SELECT COUNT(*)        FROM kanban_cards WHERE assignee_id = @id AND done_at IS NULL)     AS tasks_open,
-      (SELECT COUNT(*)        FROM kanban_cards WHERE assignee_id = @id AND done_at IS NOT NULL) AS tasks_done
-  `).get({ id })
+      (SELECT COUNT(*)        FROM kanban_cards WHERE assignee_id = @id AND done_at IS NOT NULL) AS tasks_done,
+      (SELECT COUNT(*) FROM messages WHERE user_id = @id AND parent_id IS NOT NULL)            AS thread_replies,
+      (SELECT COUNT(*) FROM messages WHERE user_id = @id AND attachment IS NOT NULL)           AS attachments,
+      (SELECT COUNT(*) FROM messages WHERE user_id = @id AND ${hour} < 5)                      AS night_messages,
+      (SELECT COUNT(*) FROM messages WHERE user_id = @id AND ${hour} BETWEEN 5 AND 7)          AS early_messages,
+      (SELECT COUNT(*) FROM reactions WHERE user_id = @id)                                     AS reactions_given,
+      (SELECT COUNT(*) FROM reactions r JOIN messages m ON m.id = r.message_id
+         WHERE m.user_id = @id AND r.user_id != @id)                                           AS reactions_got,
+      (SELECT COUNT(*) FROM kanban_cards c JOIN messages m ON m.id = c.source_message_id
+         WHERE m.user_id = @id)                                                                AS msg_tasks
+  `).get({ id, off: tzOffsetSec(user.timezone) })
+  s.days_in_team = user.created_at ? Math.max(0, Math.floor((Date.now() / 1000 - user.created_at) / 86400)) : 0
+
+  const achievements = ACHIEVEMENTS.map(a => {
+    const v = Number(a.value(s)) || 0
+    return { id: a.id, emoji: a.emoji, title: a.title, desc: a.desc, goal: a.goal, value: Math.min(v, a.goal), unlocked: v >= a.goal }
+  })
+  return { ...s, achievements }
 }
 
 module.exports = {

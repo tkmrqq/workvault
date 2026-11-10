@@ -63,6 +63,33 @@
                 <span>закрыто</span>
               </div>
             </div>
+
+            <div v-if="achievements.length" class="pv-ach">
+              <div class="pv-ach-head">
+                <span>Ачивки</span>
+                <span class="muted">{{ achUnlocked }} из {{ achievements.length }}</span>
+              </div>
+              <div class="ach-grid">
+                <button v-for="a in achievements" :key="a.id" type="button" class="ach"
+                  :class="{ on: a.unlocked, sel: achSel === a.id }" :style="{ '--p': a.value / a.goal }"
+                  :title="a.title" :aria-label="a.title + (a.unlocked ? ', получена' : ', ' + a.value + ' из ' + a.goal)"
+                  :aria-pressed="achSel === a.id" @click="achSel = achSel === a.id ? null : a.id">
+                  <span class="ach-emoji">{{ a.emoji }}</span>
+                </button>
+              </div>
+              <Transition name="pe-fade" mode="out-in">
+                <div v-if="achInfo" :key="achInfo.id" class="ach-info">
+                  <span class="ach-info-emoji">{{ achInfo.emoji }}</span>
+                  <div class="ach-info-text">
+                    <b>{{ achInfo.title }}</b>
+                    <span>{{ achInfo.desc }}</span>
+                  </div>
+                  <span class="ach-info-state" :class="{ done: achInfo.unlocked }">
+                    {{ achInfo.unlocked ? 'Получена' : achInfo.value + ' / ' + achInfo.goal }}
+                  </span>
+                </div>
+              </Transition>
+            </div>
           </div>
         </template>
 
@@ -571,6 +598,13 @@ async function loadStats() {
     if (r.ok) stats.value = await r.json()
   } catch { /* офлайн — просто без статистики */ }
 }
+// Сначала полученные, потом — по близости к цели
+const achievements = computed(() => [...(stats.value?.achievements || [])]
+  .sort((a, b) => (b.unlocked - a.unlocked) || (b.value / b.goal - a.value / a.goal)))
+const achUnlocked = computed(() => achievements.value.filter(a => a.unlocked).length)
+const achSel = ref(null)
+const achInfo = computed(() => achievements.value.find(a => a.id === achSel.value) || null)
+
 function plural(n, f) {
   const a = Math.abs(n) % 100, b = a % 10
   if (a > 10 && a < 20) return f[2]
@@ -977,6 +1011,50 @@ onUnmounted(() => {
   transition: opacity .25s ease;
 }
 .pv-stats.loading .stat { opacity: .5; }
+
+/* Ачивки */
+.pv-ach { width: 100%; margin-top: var(--space-3); }
+.pv-ach-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 12px; font-weight: 600; color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.pv-ach-head .muted { font-weight: 500; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.ach-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; justify-items: center; }
+.ach {
+  width: 40px; height: 40px; padding: 2px;
+  border-radius: 50%;
+  /* кольцо прогресса */
+  background: conic-gradient(color-mix(in oklab, var(--accent) 70%, transparent) calc(var(--p, 0) * 1turn), var(--border) 0);
+  transition: transform .18s var(--ease-out, ease), box-shadow .2s ease;
+}
+.ach:hover { transform: translateY(-2px); }
+.ach:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ach-emoji {
+  display: grid; place-items: center;
+  width: 100%; height: 100%;
+  border-radius: 50%;
+  background: var(--surface-2);
+  font-size: 18px; line-height: 1;
+  filter: grayscale(1); opacity: .45;
+  transition: filter .2s ease, opacity .2s ease;
+}
+.ach.on { background: linear-gradient(135deg, #ffd66b, #f59e0b 55%, #f97316); box-shadow: 0 0 12px -2px oklch(0.8 0.16 75 / 0.45); }
+.ach.on .ach-emoji { filter: none; opacity: 1; background: color-mix(in oklab, var(--surface-2) 88%, #f59e0b); }
+.ach.sel { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
+.ach-info {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 10px; padding: 8px 10px;
+  background: var(--surface-2);
+  border-radius: var(--radius-md);
+  text-align: left;
+}
+.ach-info-emoji { font-size: 20px; }
+.ach-info-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ach-info-text b { font-size: 13px; color: var(--text); }
+.ach-info-text span { font-size: 12px; color: var(--text-faint); }
+.ach-info-state { flex: none; font-size: 12px; font-weight: 600; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.ach-info-state.done { color: #f59e0b; }
 .stat b { font-size: 17px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
 .stat span { font-size: 11px; color: var(--text-faint); }
 
