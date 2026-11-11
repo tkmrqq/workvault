@@ -761,9 +761,19 @@ module.exports = {
         const total = db.prepare('SELECT COUNT(*) as c FROM kanban_workspaces WHERE owner_id IS NULL').get().c
         if (total <= 1) return { ok: false, error: 'Нельзя удалить последнюю общую рабочую зону' }
       }
-      db.prepare('DELETE FROM kanban_workspaces WHERE id=?').run(id)
+      // В старых базах kanban_columns.workspace_id добавлен миграцией БЕЗ ON DELETE CASCADE,
+      // поэтому при включённых foreign_keys DELETE зоны падал с FOREIGN KEY constraint failed.
+      // Удаляем колонки сами (карточки/подзадачи/теги уходят каскадом по column_id).
+      db.transaction(() => {
+        db.prepare('DELETE FROM kanban_columns WHERE workspace_id=?').run(id)
+        db.prepare('DELETE FROM kanban_workspaces WHERE id=?').run(id)
+      })()
       return { ok: true }
     },
+    cardIdsOfWorkspace: (id) => db.prepare(`
+      SELECT c.id FROM kanban_cards c JOIN kanban_columns col ON col.id = c.column_id
+      WHERE col.workspace_id = ?
+    `).all(id).map(r => r.id),
 
     // ── Доска ─────────────────────────────────────────────
     getBoard: (workspaceId) => {

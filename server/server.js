@@ -694,11 +694,19 @@ app.patch('/api/kanban/workspaces/:id', (req, res) => {
 
 app.delete('/api/kanban/workspaces/:id', (req, res) => {
   if (!canAccessWorkspace(req.user, req.params.id)) return notFound(res)
-  const ws = db.kanban.getWorkspace(Number(req.params.id))
-  const result = db.kanban.deleteWorkspace(Number(req.params.id))
-  if (!result.ok) return res.status(400).json(result)
-  emitWorkspacesUpdate(ws?.owner_id)
-  res.json(result)
+  const id = Number(req.params.id)
+  const ws = db.kanban.getWorkspace(id)
+  try {
+    const links = linksFor(db.kanban.cardIdsOfWorkspace(id)) // до удаления — потом карточек уже нет
+    const result = db.kanban.deleteWorkspace(id)
+    if (!result.ok) return res.status(400).json(result)
+    emitWorkspacesUpdate(ws?.owner_id)
+    emitTaskLinks(links) // у сообщений в чате пропадает плашка задачи
+    res.json(result)
+  } catch (e) {
+    console.error('delete workspace failed:', e)
+    res.status(500).json({ ok: false, error: 'Не удалось удалить зону' })
+  }
 })
 
 // ─── KANBAN: ДОСКА ──────────────────────────────────────────

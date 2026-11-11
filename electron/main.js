@@ -21,6 +21,24 @@ function trustedServerUrl(url) {
   return false
 }
 
+let retryTimer = null
+function loadServerUi() {
+  clearTimeout(retryTimer)
+  mainWindow?.loadURL(SERVER_URL.replace(/\/$/, '') + '/')
+}
+function offlinePage(reason) {
+  const html = `<!doctype html><meta charset="utf-8"><title>WorkVault</title>
+  <body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
+    background:#0d0d0d;color:#ddd;font:14px system-ui,sans-serif;-webkit-app-region:drag">
+  <div style="text-align:center;max-width:420px">
+    <div style="font-size:18px;font-weight:700;margin-bottom:8px">Нет связи с сервером</div>
+    <div style="opacity:.6">${String(SERVER_URL).replace(/[<>&"]/g, '')}</div>
+    <div style="opacity:.45;margin-top:4px">${String(reason || '').replace(/[<>&"]/g, '')}</div>
+    <div style="opacity:.6;margin-top:16px">Пробую переподключиться…</div>
+  </div></body>`
+  return 'data:text/html;charset=utf-8,' + encodeURIComponent(html)
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -108,7 +126,7 @@ function createWindow() {
   })
 
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    const appUrl = isDev ? 'http://localhost:5173' : 'file://'
+    const appUrl = isDev ? 'http://localhost:5173' : SERVER_URL.replace(/\/$/, '') + '/'
     if (!url.startsWith(appUrl)) {
       event.preventDefault()
       shell.openExternal(url)
@@ -118,8 +136,22 @@ function createWindow() {
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173')
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
+    // Раньше грузили dist/index.html с file:// — для браузера это другой сайт, и
+    // httpOnly-cookie с SameSite=Lax (access_token/refresh_token) на запросах к серверу
+    // не сохранялись/не отправлялись → логин «проходил», но сессии не было.
+    // SameSite=None по http нельзя (требует Secure), поэтому открываем фронт,
+    // который раздаёт сам сервер — тогда всё same-origin.
+    loadServerUi()
   }
+
+  // Сервер недоступен — показываем заглушку и переподключаемся раз в 5 сек
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
+    if (isDev || !isMainFrame || code === -3 /* ABORTED */ || String(url).startsWith('data:')) return
+    mainWindow.loadURL(offlinePage(desc))
+    mainWindow.show()
+    clearTimeout(retryTimer)
+    retryTimer = setTimeout(loadServerUi, 5000)
+  })
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show()
