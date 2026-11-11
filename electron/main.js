@@ -1,8 +1,8 @@
-const { app, BrowserWindow, Notification, ipcMain, shell, dialog, Menu, clipboard } = require('electron')
+const { app, BrowserWindow, Notification, ipcMain, shell, dialog, Menu, clipboard, session, net } = require('electron')
 const path = require('path')
 const fs = require('fs')
-const https = require('https')
-const http = require('http')
+const { Readable } = require('stream')
+const { pipeline } = require('stream/promises')
 const { autoUpdater } = require('electron-updater')
 const { resolveServerUrl } = require('./serverUrl')
 
@@ -20,6 +20,18 @@ function trustedServerUrl(url) {
   } catch { /* ignore malformed */ }
   return false
 }
+
+// Самоподписанный cert nginx: доверяем только своим хостам — для ВСЕХ сессий
+// (окно, electron-updater, net.fetch в main). Событие certificate-error
+// покрывает только webContents, до запросов main-процесса оно не доходит.
+function installCertTrust(ses) {
+  ses.setCertificateVerifyProc((req, cb) => {
+    if (req.errorCode === 0) return cb(-3)                 // валидный cert — обычная проверка Chromium
+    if (trustedServerUrl('https://' + req.hostname)) return cb(0)
+    cb(-2)
+  })
+}
+app.on('session-created', installCertTrust)
 
 let retryTimer = null
 function loadServerUi() {
@@ -163,6 +175,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  installCertTrust(session.defaultSession)
   SERVER_URL = resolveServerUrl()
   autoUpdater.setFeedURL({
     provider: 'generic',
@@ -223,17 +236,18 @@ ipcMain.handle('download:file', async (_, { url, filename }) => {
   if (canceled || !filePath) return { ok: false, reason: 'cancelled' }
 
   const savePath = ext && !filePath.endsWith(ext) ? filePath + ext : filePath
-  const fullUrl = url.startsWith('http') ? url : `${SERVER_URL}${url}`
-  const proto = fullUrl.startsWith('https') ? https : http
+  const fullUrl = url.startsWith('http') ? url : `${SERVER_URL.replace(/\/$/, '')}${url}`
 
-  return new Promise((resolve) => {
-    const file = fs.createWriteStream(savePath)
-    proto.get(fullUrl, (res) => {
-      res.pipe(file)
-      file.on('finish', () => { file.close(); resolve({ ok: true, filePath: savePath }) })
-    }).on('error', (err) => {
-      fs.unlink(savePath, () => { })
-      resolve({ ok: false, reason: err.message })
-    })
-  })
+  // net.fetch — сетевой стек Chromium: проходит через installCertTrust
+  // (самоподписанный cert) и сам идёт по редиректам (http → https от nginx).
+  // Node-шный https.get не умеет ни то, ни другое.
+  try {
+    const res = await net.fetch(fullUrl)
+    if (!res.ok || !res.body) return { ok: false, reason: `HTTP ${res.status}` }
+    await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(savePath))
+    return { ok: true, filePath: savePath }
+  } catch (err) {
+    fs.unlink(savePath, () => { })
+    return { ok: false, reason: err.message }
+  }
 })

@@ -84,7 +84,7 @@
     },
     "publish": {
       "provider": "generic",
-      "url": "http://172.16.99.37:3000/downloads/"
+      "url": "https://172.16.99.37/downloads/"
     }
   }
 }
