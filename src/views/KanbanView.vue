@@ -865,9 +865,14 @@ async function saveWorkspace({ name, icon, color, is_private }) {
 }
 async function removeWorkspace(ws) {
   if (!await confirmDialog(`Удалить зону «${ws.name}» вместе со всеми её колонками и задачами?`, { danger: true, confirmLabel: 'Удалить' })) return
-  const r = await fetch(`${API}/api/kanban/workspaces/${ws.id}`, { method: 'DELETE' })
-  const d = await r.json()
-  if (!d.ok) { alert(d.error || 'Не удалось удалить'); return }
+  let d = null
+  try {
+    const r = await fetch(`${API}/api/kanban/workspaces/${ws.id}`, { method: 'DELETE' })
+    d = await r.json().catch(() => ({ ok: false, error: `Ошибка сервера (${r.status})` }))
+  } catch {
+    d = { ok: false, error: 'Нет связи с сервером' }
+  }
+  if (!d?.ok) { alert(d?.error || 'Не удалось удалить'); return }
   if (activeWorkspaceId.value === ws.id) activeWorkspaceId.value = null
   await loadWorkspaces()
   await loadBoard()

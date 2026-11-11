@@ -1,6 +1,6 @@
 {
   "name": "workvault",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "workvault",
   "main": "electron/main.js",
   "scripts": {
