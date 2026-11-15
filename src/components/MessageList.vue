@@ -247,7 +247,7 @@ watch(
   background: var(--accent-soft);
   transition: all var(--transition);
 }
-.load-btn:hover:not(:disabled) { background: var(--accent); color: white; }
+.load-btn:hover:not(:disabled) { background: var(--accent); color: var(--on-accent, #fff); }
 .load-btn:disabled { opacity: .5; cursor: not-allowed; }
 
 .day-group { position: relative; }

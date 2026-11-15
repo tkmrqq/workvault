@@ -1076,7 +1076,7 @@ onUnmounted(() => {
   font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: var(--radius-full);
   background: var(--surface); color: var(--text-faint);
 }
-.mobile-tab.active .mobile-tab-count { background: var(--accent); color: #fff; }
+.mobile-tab.active .mobile-tab-count { background: var(--accent); color: var(--on-accent, #fff); }
 
 @media (max-width: 860px) {
   .mobile-only { display: flex; }
@@ -1138,7 +1138,7 @@ onUnmounted(() => {
 .btn-save {
   padding: 8px 18px; border-radius: var(--radius-md);
   font-size: var(--text-sm); font-weight: 600;
-  background: var(--accent); color: #fff;
+  background: var(--accent); color: var(--on-accent, #fff);
   transition: background var(--transition);
 }
 .btn-save:hover:not(:disabled) { background: var(--accent-hover); }
@@ -1176,7 +1176,7 @@ onUnmounted(() => {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 6px 14px; border-radius: var(--radius-md);
   font-size: var(--text-xs); font-weight: 600;
-  background: var(--accent); color: #fff;
+  background: var(--accent); color: var(--on-accent, #fff);
   transition: background var(--transition);
 }
 .btn-add-subtask:hover { background: var(--accent-hover); }
@@ -1483,7 +1483,7 @@ onUnmounted(() => {
 .co-badge {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 2px 8px; border-radius: 999px;
-  background: var(--accent); color: #fff; font-weight: 700;
+  background: var(--accent); color: var(--on-accent, #fff); font-weight: 700;
 }
 .chat-origin.deleted .co-badge { background: var(--surface-3, var(--border)); color: var(--text-muted); }
 .co-channel { font-weight: 600; color: var(--text); }

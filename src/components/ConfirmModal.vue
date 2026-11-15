@@ -73,7 +73,7 @@ function onCancel()  { resolveConfirm(false) }
   border: 1px solid var(--border);
 }
 .confirm-btn-cancel:hover { background: var(--hover); color: var(--text); }
-.confirm-btn-accent { background: var(--accent); color: #fff; }
+.confirm-btn-accent { background: var(--accent); color: var(--on-accent, #fff); }
 .confirm-btn-accent:hover { background: var(--accent-hover); }
 .confirm-btn-danger { background: rgba(224,108,117,.12); color: #e06c75; }
 .confirm-btn-danger:hover { background: rgba(224,108,117,.25); }

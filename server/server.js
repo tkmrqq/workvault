@@ -105,6 +105,15 @@ function sniffImageMime(filePath) {
 }
 const randomName = (prefix, ext) => `${prefix}${Date.now()}-${crypto.randomBytes(12).toString('hex')}${ext}`
 
+// multer 1.x (busboy) отдаёт originalname в latin1, поэтому «Отчёт.pdf» приходит как «ÐÑÑÐµÑ.pdf».
+// Перекодируем latin1 → utf8; если результат не валидный UTF-8 (имя и так было latin1/ASCII) — оставляем как есть.
+function fixOriginalName(name) {
+  const raw = String(name || '')
+  if (!/[\u0080-\u00ff]/.test(raw) || /[^\u0000-\u00ff]/.test(raw)) return raw.normalize('NFC')
+  const decoded = Buffer.from(raw, 'latin1').toString('utf8')
+  return (decoded.includes('\uFFFD') ? raw : decoded).normalize('NFC')
+}
+
 const storage = multer.diskStorage({
   destination: (_, __, cb) => cb(null, UPLOADS_DIR),
   // Расширение уже проверено в fileFilter, имя — непредсказуемое (crypto, а не Math.random)
@@ -115,6 +124,8 @@ const upload = multer({
   storage,
   limits: { fileSize: config.MAX_FILE_BYTES, files: 1 }, // из MAX_FILE_MB в .env, по умолчанию 100MB
   fileFilter: (req, file, cb) => {
+    // Чиним кириллицу в имени один раз — дальше его используют и storage, и /api/upload
+    file.originalname = fixOriginalName(file.originalname)
     // Запрет папок — браузер шлёт папки как пустые файлы с mime = ''
     if (file.originalname.includes('/') || file.originalname.includes('\\')) {
       return cb(new Error('Папки не поддерживаются'), false)
@@ -346,9 +357,12 @@ app.get('/api/folders', (_, res) => res.json(db.getFolders()))
 app.get('/api/messages/:channelId', (req, res) => {
   try {
     // Раньше limit не ограничивался: ?limit=10000000 вытаскивал всю историю и клал сервер
+    const channelId = Number(req.params.channelId)
+    // DM читают только участники; чужой/несуществующий канал — 404
+    if (!db.canAccessChannel(channelId, req.user.id)) return notFound(res)
     const limit = Math.min(Math.max(Math.trunc(Number(req.query.limit)) || 50, 1), 200)
     const messages = db.getMessages(
-      Number(req.params.channelId),
+      channelId,
       limit,
       req.query.before ? Number(req.query.before) : null
     )
@@ -358,6 +372,44 @@ app.get('/api/messages/:channelId', (req, res) => {
     })
   } catch (e) {
     console.error('getMessages error:', e)
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' })
+  }
+})
+
+// ─── ЛИЧНЫЕ СООБЩЕНИЯ ────────────────────────────────────────
+// Список диалогов текущего юзера: собеседник, последнее сообщение, непрочитанное
+app.get('/api/dms', (req, res) => {
+  try {
+    res.json(db.getDmsForUser(req.user.id))
+  } catch (e) {
+    console.error('dms error:', e)
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' })
+  }
+})
+
+// Открыть (или создать) диалог с юзером. Диалог с собой = «Избранное»
+app.post('/api/dms', (req, res) => {
+  try {
+    const peerId = Number(req.body?.user_id)
+    if (!Number.isSafeInteger(peerId) || peerId <= 0 || !db.getUserById(peerId)) {
+      return res.status(404).json({ error: 'Пользователь не найден' })
+    }
+    const channelId = db.getOrCreateDm(req.user.id, peerId)
+    res.json(db.dmForUser(channelId, req.user.id))
+  } catch (e) {
+    console.error('dm create error:', e)
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' })
+  }
+})
+
+// Закреплённые сообщения канала или диалога
+app.get('/api/channels/:id/pins', (req, res) => {
+  try {
+    const channelId = Number(req.params.id)
+    if (!db.canAccessChannel(channelId, req.user.id)) return notFound(res)
+    res.json(withPrivateTasks(db.getPinned(channelId), req.user.id).map(withReactions))
+  } catch (e) {
+    console.error('pins error:', e)
     res.status(500).json({ error: 'Внутренняя ошибка сервера' })
   }
 })
@@ -382,7 +434,7 @@ app.get('/api/messages/:id/thread', (req, res) => {
   try {
     let parent = db.getMessageFull(Number(req.params.id))
     if (parent?.parent_id) parent = db.getMessageFull(parent.parent_id) // открыли ответ — показываем весь тред
-    if (!parent) return res.status(404).json({ error: 'Сообщение не найдено' })
+    if (!parent || !db.canAccessChannel(parent.channel_id, req.user.id)) return res.status(404).json({ error: 'Сообщение не найдено' })
     res.json({
       parent:  withReactions(withPrivateTasks([parent], req.user.id)[0]),
       replies: withPrivateTasks(db.getReplies(parent.id), req.user.id).map(withReactions)
@@ -396,7 +448,7 @@ app.get('/api/messages/:id/thread', (req, res) => {
 app.post('/api/messages/:id/task', (req, res) => {
   try {
     const msg = db.getMessageById(Number(req.params.id))
-    if (!msg) return res.status(404).json({ error: 'Сообщение не найдено' })
+    if (!msg || !db.canAccessChannel(msg.channel_id, req.user.id)) return res.status(404).json({ error: 'Сообщение не найдено' })
 
     const { title, workspace_id, column_id } = req.body || {}
     const wsHint = Number(workspace_id) || null
@@ -1013,14 +1065,18 @@ io.on('connection', (socket) => {
 
   socket.on('channel:join', (payload) => {
     const channelId = toId(payload?.channelId)
-    if (!channelId || !db.channelExists(channelId)) return
+    // В комнату DM пускаем только участников — иначе все события диалога утекут
+    if (!channelId || !db.canAccessChannel(channelId, socket.user.id)) return
+    const ch = db.getChannel(channelId)
     const prev = onlineUsers.get(socket.id)
     if (prev?.channelId) socket.leave(`channel:${prev.channelId}`)
     socket.join(`channel:${channelId}`)
     if (prev) {
       prev.channelId = channelId
+      prev.isDm = ch?.kind === 'dm'
       onlineUsers.set(socket.id, prev)
     }
+    if (ch?.kind === 'dm') db.markChannelRead(channelId, socket.user.id)
     io.emit('online:update', getOnlineList())
   })
 
@@ -1031,9 +1087,10 @@ io.on('connection', (socket) => {
     try {
       const { text, attachment, linkMeta, parentId, poll, stickerId } = payload || {}
       const channelId = toId(payload?.channelId)
-      if (!channelId || !db.channelExists(channelId)) {
+      if (!channelId || !db.canAccessChannel(channelId, socket.user.id)) {
         ack?.({ ok: false, error: 'Канал не найден' }); return
       }
+      const channel = db.getChannel(channelId)
       if (!allowSocketEvent(socket, 'send', 30, 10_000)) {
         ack?.({ ok: false, error: 'Слишком часто — подожди пару секунд' }); return
       }
@@ -1097,8 +1154,18 @@ io.on('connection', (socket) => {
         io.to(`channel:${channelId}`).emit('message:thread', { messageId: parent.id, ...db.threadMeta(parent.id) })
       } else {
         io.to(`channel:${channelId}`).emit('message:new', withReactions(msg))
-        // Только id канала/автора — без текста, для счётчиков непрочитанного
-        io.emit('channel:activity', { channelId, userId: socket.user.id })
+        if (channel?.kind === 'dm') {
+          // DM: событие только в личные комнаты участников (список диалогов,
+          // счётчик, уведомление), остальные даже не узнают о переписке
+          db.markChannelRead(channelId, socket.user.id)
+          const preview = { id: msg.id, user_id: msg.user_id, user_name: msg.user_name, text: clip(msg.text, 200), type: msg.type, created_at: msg.created_at }
+          for (const uid of db.channelMemberIds(channelId)) {
+            io.to(`user:${uid}`).emit('dm:activity', { channelId, userId: socket.user.id, message: preview })
+          }
+        } else {
+          // Только id канала/автора — без текста, для счётчиков непрочитанного
+          io.emit('channel:activity', { channelId, userId: socket.user.id })
+        }
       }
       ack?.({ ok: true, id: msg.id })
     } catch (e) {
@@ -1113,7 +1180,7 @@ io.on('connection', (socket) => {
     const text = payload?.text == null ? '' : String(payload.text)
     if (!messageId || !text.trim() || text.length > MAX_MESSAGE_LEN) return
     const msg = db.getMessageById(messageId)
-    if (!msg) return
+    if (!msg || !db.canAccessChannel(msg.channel_id, socket.user.id)) return
     const r = db.editMessage(messageId, text, socket.user.id) // WHERE user_id=? — чужое не отредактирует
     if (r.changes) io.to(`channel:${msg.channel_id}`).emit('message:edited', { messageId, text })
   })
@@ -1125,9 +1192,11 @@ io.on('connection', (socket) => {
       if (!messageId) { ack?.({ ok: false, error: 'Нет id' }); return }
       const before = db.getMessageById(messageId)
       if (!before) { ack?.({ ok: true }); return } // уже удалено — клиенту можно убрать
+      if (!db.canAccessChannel(before.channel_id, socket.user.id)) { ack?.({ ok: false, error: 'Нет доступа' }); return }
       const r = db.deleteMessage(messageId, socket.user.id) // та же защита на уровне SQL
       if (!r.changes) { ack?.({ ok: false, error: 'Нельзя удалить чужое сообщение' }); return }
       io.to(`channel:${before.channel_id}`).emit('message:deleted', { messageId })
+      if (before.pinned_at) io.to(`channel:${before.channel_id}`).emit('message:pin', { messageId, channelId: before.channel_id, pinned: false })
       if (before.parent_id) {
         io.to(`channel:${before.channel_id}`).emit('message:thread', { messageId: before.parent_id, ...db.threadMeta(before.parent_id) })
       }
@@ -1144,7 +1213,7 @@ io.on('connection', (socket) => {
     if (!messageId || !REACTION_RE.test(emoji)) return
     if (!allowSocketEvent(socket, 'reaction', 40, 10_000)) return
     const msg = db.getMessageById(messageId)
-    if (!msg) return
+    if (!msg || !db.canAccessChannel(msg.channel_id, socket.user.id)) return
     db.toggleReaction(messageId, socket.user.id, emoji)
     io.to(`channel:${msg.channel_id}`).emit('reaction:update', { messageId, reactions: db.getReactions(messageId) })
   })
@@ -1153,7 +1222,7 @@ io.on('connection', (socket) => {
   socket.on('poll:vote', (payload) => {
     try {
       const m = db.getMessageById(toId(payload?.messageId))
-      if (!m?.poll) return
+      if (!m?.poll || !db.canAccessChannel(m.channel_id, socket.user.id)) return
       const p = JSON.parse(m.poll)
       const i = Number(payload?.option)
       if (!Number.isInteger(i) || i < 0 || i >= p.options.length) return
@@ -1167,12 +1236,56 @@ io.on('connection', (socket) => {
   socket.on('typing:start', (payload) => {
     const channelId = toId(payload?.channelId)
     if (!channelId || !allowSocketEvent(socket, 'typing', 20, 10_000)) return
+    if (!socket.rooms.has(`channel:${channelId}`)) return // печатать можно только в тот канал, где сидишь
     socket.to(`channel:${channelId}`).emit('typing:update', { userName: socket.user.name, typing: true })
   })
   socket.on('typing:stop', (payload) => {
     const channelId = toId(payload?.channelId)
-    if (!channelId) return
+    if (!channelId || !socket.rooms.has(`channel:${channelId}`)) return
     socket.to(`channel:${channelId}`).emit('typing:update', { userName: socket.user.name, typing: false })
+  })
+
+  // ─ Закрепление сообщения ──────────────────────────────────────
+  // Закреплять/откреплять может любой, кто видит канал (в DM — оба участника).
+  // Только сообщения ленты (не ответы в треде), не больше MAX_PINS_PER_CHANNEL.
+  socket.on('message:pin', (payload, ack) => {
+    if (typeof ack !== 'function') ack = null
+    try {
+      const messageId = toId(payload?.messageId)
+      const pinned = !!payload?.pinned
+      if (!messageId) { ack?.({ ok: false, error: 'Нет id' }); return }
+      if (!allowSocketEvent(socket, 'pin', 20, 10_000)) { ack?.({ ok: false, error: 'Слишком часто' }); return }
+      const msg = db.getMessageById(messageId)
+      if (!msg || !db.canAccessChannel(msg.channel_id, socket.user.id)) { ack?.({ ok: false, error: 'Сообщение не найдено' }); return }
+      if (msg.parent_id) { ack?.({ ok: false, error: 'Ответы в треде закрепить нельзя' }); return }
+      if (pinned === !!msg.pinned_at) { ack?.({ ok: true }); return }
+      if (pinned && db.countPins(msg.channel_id) >= db.MAX_PINS_PER_CHANNEL) {
+        ack?.({ ok: false, error: `Максимум ${db.MAX_PINS_PER_CHANNEL} закреплённых — сначала открепи старые` }); return
+      }
+      db.setPinned(messageId, socket.user.id, pinned)
+      const full = db.getMessageFull(messageId)
+      io.to(`channel:${msg.channel_id}`).emit('message:pin', {
+        messageId,
+        channelId: msg.channel_id,
+        pinned,
+        pinned_at: full?.pinned_at || null,
+        pinned_by: full?.pinned_by || null,
+        pinned_by_name: full?.pinned_by_name || null,
+        message: pinned && full ? withReactions(full) : null,
+      })
+      ack?.({ ok: true })
+    } catch (e) {
+      console.error('message:pin error:', e)
+      ack?.({ ok: false, error: 'Не удалось закрепить' })
+    }
+  })
+
+  // Клиент прочитал диалог (счётчик непрочитанного DM хранится на сервере)
+  socket.on('channel:read', (payload) => {
+    const channelId = toId(payload?.channelId)
+    if (!channelId || !allowSocketEvent(socket, 'read', 60, 10_000)) return
+    if (!db.canAccessChannel(channelId, socket.user.id)) return
+    db.markChannelRead(channelId, socket.user.id)
   })
 
   socket.on('disconnect', () => {
@@ -1188,7 +1301,7 @@ io.on('connection', (socket) => {
 function getOnlineList() {
   const map = {}
   for (const [, v] of onlineUsers) {
-    map[v.userId] = { userId: v.userId, userName: v.userName, channelId: v.channelId }
+    map[v.userId] = { userId: v.userId, userName: v.userName, channelId: v.isDm ? null : v.channelId }
   }
   return Object.values(map)
 }

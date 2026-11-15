@@ -57,6 +57,7 @@
   --accent-hover: #9a8bf9;
   --accent-soft: rgba(124, 106, 247, .13);
   --accent-line: rgba(124, 106, 247, .35);
+  --on-accent: #fff;
 
   --green: #4caf7d;
   --orange: #e8956d;
@@ -87,6 +88,7 @@
   --accent-hover: #4b3dd0;
   --accent-soft: rgba(95, 79, 230, .1);
   --accent-line: rgba(95, 79, 230, .3);
+  --on-accent: #fff;
 
   --green: #2e8b57;
   --orange: #c0622a;
@@ -96,6 +98,219 @@
   --shadow-sm: 0 1px 4px rgba(0, 0, 0, .07);
   --shadow-md: 0 4px 18px rgba(0, 0, 0, .09);
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, .12);
+}
+
+/* ── ЦВЕТОВЫЕ СХЕМЫ ───────────────────────────────────────
+   Выбирается в Настройки → Оформление, хранится в localStorage (wv-color-scheme).
+   data-scheme стоит рядом с data-theme (на <html> и корневом div),
+   поэтому селектор из двух атрибутов всегда сильнее базового [data-theme].
+   «Фиалка» (violet) = базовые цвета выше. */
+:root { --on-accent: #fff; }
+
+/* ocean */
+[data-theme="dark"][data-scheme="ocean"] {
+  --bg: #0b0e13;
+  --surface: #0f131a;
+  --surface-2: #141922;
+  --surface-3: #19202b;
+  --hover: #1f2733;
+  --divider: #242c38;
+  --border: #2b3442;
+  --accent: #4a9eff;
+  --accent-hover: #74b5ff;
+  --accent-soft: rgba(74,158,255, .13);
+  --accent-line: rgba(74,158,255, .35);
+  --on-accent: #fff;
+}
+[data-theme="light"][data-scheme="ocean"] {
+  --bg: #f1f4f8;
+  --surface: #f8fafc;
+  --surface-2: #ffffff;
+  --surface-3: #e9eef4;
+  --hover: #e2e8f0;
+  --divider: #dbe2eb;
+  --border: #cdd5df;
+  --accent: #2f7ae5;
+  --accent-hover: #2265c7;
+  --accent-soft: rgba(47,122,229, .13);
+  --accent-line: rgba(47,122,229, .35);
+  --on-accent: #fff;
+}
+
+/* emerald */
+[data-theme="dark"][data-scheme="emerald"] {
+  --bg: #0b0f0d;
+  --surface: #0f1412;
+  --surface-2: #141a17;
+  --surface-3: #19211d;
+  --hover: #1f2924;
+  --divider: #242e29;
+  --border: #2b3631;
+  --accent: #3fbf8a;
+  --accent-hover: #62d3a3;
+  --accent-soft: rgba(63,191,138, .13);
+  --accent-line: rgba(63,191,138, .35);
+  --on-accent: #fff;
+}
+[data-theme="light"][data-scheme="emerald"] {
+  --bg: #f1f5f2;
+  --surface: #f8faf9;
+  --surface-2: #ffffff;
+  --surface-3: #e8efea;
+  --hover: #e0e9e3;
+  --divider: #d8e2db;
+  --border: #c9d5cd;
+  --accent: #1f9467;
+  --accent-hover: #187a55;
+  --accent-soft: rgba(31,148,103, .13);
+  --accent-line: rgba(31,148,103, .35);
+  --on-accent: #fff;
+}
+
+/* amber */
+[data-theme="dark"][data-scheme="amber"] {
+  --bg: #0f0d0a;
+  --surface: #14110d;
+  --surface-2: #1a1611;
+  --surface-3: #211c16;
+  --hover: #29231b;
+  --divider: #2e2820;
+  --border: #362f26;
+  --accent: #e8a33d;
+  --accent-hover: #f0b965;
+  --accent-soft: rgba(232,163,61, .13);
+  --accent-line: rgba(232,163,61, .35);
+  --on-accent: #1a1208;
+}
+[data-theme="light"][data-scheme="amber"] {
+  --bg: #f7f3ec;
+  --surface: #fbf8f3;
+  --surface-2: #ffffff;
+  --surface-3: #f0e9de;
+  --hover: #ebe2d4;
+  --divider: #e4dacb;
+  --border: #d7cbb8;
+  --accent: #b9741a;
+  --accent-hover: #9a5f12;
+  --accent-soft: rgba(185,116,26, .13);
+  --accent-line: rgba(185,116,26, .35);
+  --on-accent: #fff;
+}
+
+/* sakura */
+[data-theme="dark"][data-scheme="sakura"] {
+  --bg: #100c0e;
+  --surface: #151013;
+  --surface-2: #1b1519;
+  --surface-3: #221a1f;
+  --hover: #2a2027;
+  --divider: #30252c;
+  --border: #382c34;
+  --accent: #ec6fa8;
+  --accent-hover: #f292bd;
+  --accent-soft: rgba(236,111,168, .13);
+  --accent-line: rgba(236,111,168, .35);
+  --on-accent: #fff;
+}
+[data-theme="light"][data-scheme="sakura"] {
+  --bg: #f8f1f4;
+  --surface: #fcf8fa;
+  --surface-2: #ffffff;
+  --surface-3: #f2e7ec;
+  --hover: #ede0e6;
+  --divider: #e7d7de;
+  --border: #dbc7d0;
+  --accent: #d0467f;
+  --accent-hover: #b33669;
+  --accent-soft: rgba(208,70,127, .13);
+  --accent-line: rgba(208,70,127, .35);
+  --on-accent: #fff;
+}
+
+/* crimson */
+[data-theme="dark"][data-scheme="crimson"] {
+  --bg: #0f0b0b;
+  --surface: #140f0f;
+  --surface-2: #1a1414;
+  --surface-3: #211919;
+  --hover: #291f1f;
+  --divider: #2f2424;
+  --border: #372b2b;
+  --accent: #e5534b;
+  --accent-hover: #ee7a73;
+  --accent-soft: rgba(229,83,75, .13);
+  --accent-line: rgba(229,83,75, .35);
+  --on-accent: #fff;
+}
+[data-theme="light"][data-scheme="crimson"] {
+  --bg: #f7f1f0;
+  --surface: #fbf8f7;
+  --surface-2: #ffffff;
+  --surface-3: #f0e6e5;
+  --hover: #ebdfdd;
+  --divider: #e4d6d4;
+  --border: #d8c6c3;
+  --accent: #c73a33;
+  --accent-hover: #a92e28;
+  --accent-soft: rgba(199,58,51, .13);
+  --accent-line: rgba(199,58,51, .35);
+  --on-accent: #fff;
+}
+
+/* nord */
+[data-theme="dark"][data-scheme="nord"] {
+  --bg: #1d212a;
+  --surface: #222731;
+  --surface-2: #272d38;
+  --surface-3: #2e3440;
+  --hover: #353c4a;
+  --divider: #3b4252;
+  --border: #434c5e;
+  --text: #e5e9f0;
+  --text-muted: #a3abba;
+  --text-faint: #6b7486;
+  --accent: #88c0d0;
+  --accent-hover: #a3d1de;
+  --accent-soft: rgba(136,192,208, .13);
+  --accent-line: rgba(136,192,208, .35);
+  --on-accent: #1d212a;
+  --green: #a3be8c;
+  --orange: #d08770;
+  --red: #bf616a;
+  --gold: #ebcb8b;
+}
+[data-theme="light"][data-scheme="nord"] {
+  --bg: #eceff4;
+  --surface: #f3f5f8;
+  --surface-2: #ffffff;
+  --surface-3: #e5e9f0;
+  --hover: #dde2ea;
+  --divider: #d8dee9;
+  --border: #c9d1dd;
+  --text: #2e3440;
+  --text-muted: #4c566a;
+  --text-faint: #8f99ab;
+  --accent: #5e81ac;
+  --accent-hover: #4c6d96;
+  --accent-soft: rgba(94,129,172, .13);
+  --accent-line: rgba(94,129,172, .35);
+  --on-accent: #fff;
+}
+
+/* mono */
+[data-theme="dark"][data-scheme="mono"] {
+  --accent: #c8c8c3;
+  --accent-hover: #e4e4df;
+  --accent-soft: rgba(200,200,195, .13);
+  --accent-line: rgba(200,200,195, .35);
+  --on-accent: #111111;
+}
+[data-theme="light"][data-scheme="mono"] {
+  --accent: #3a3a38;
+  --accent-hover: #1f1f1e;
+  --accent-soft: rgba(58,58,56, .13);
+  --accent-line: rgba(58,58,56, .35);
+  --on-accent: #fff;
 }
 
 /* ── BASE ────────────────────────────── */

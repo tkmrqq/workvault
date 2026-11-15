@@ -902,7 +902,7 @@ onUnmounted(() => {
 }
 /* Под цвет — строится из «Цвета имени» (переменная --bc задаётся в разметке) */
 .banner-auto {
-  --bc: #7c6af7;
+  --bc: var(--accent);
   background:
     radial-gradient(90% 140% at 0% 0%, color-mix(in oklab, var(--bc) 50%, white) 0, transparent 60%),
     radial-gradient(80% 120% at 100% 100%, color-mix(in oklab, var(--bc) 75%, black) 0, transparent 65%),
@@ -932,7 +932,7 @@ onUnmounted(() => {
 }
 .btn:active:not(:disabled) { transform: scale(.98); }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
-.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary { background: var(--accent); color: var(--on-accent, #fff); }
 .btn-primary:hover:not(:disabled) { background: var(--accent-hover, var(--accent)); }
 .btn-soft { background: var(--surface-2); border-color: var(--border); color: var(--text); }
 .btn-soft:hover { background: var(--hover); }

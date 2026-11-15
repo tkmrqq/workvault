@@ -5,6 +5,7 @@
       <Sidebar />
       <div class="chat-main">
         <ChannelHeader />
+        <PinnedBar v-if="store.activeChId" />
         <MessageList />
         <MessageInput />
       </div>
@@ -17,12 +18,13 @@
 </template>
 
 <script setup>
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import TitleBar      from '@/components/TitleBar.vue'
 import Sidebar       from '@/components/Sidebar.vue'
 import ChannelHeader from '@/components/ChannelHeader.vue'
+import PinnedBar     from '@/components/PinnedBar.vue'
 import MessageList   from '@/components/MessageList.vue'
 import MessageInput  from '@/components/MessageInput.vue'
 import UpdateBanner from '@/components/UpdateBanner.vue'
@@ -35,6 +37,11 @@ const router = useRouter()
 const threadVisible = ref(false)
 
 onUnmounted(() => store.closeThread())
+
+watch(() => route.params.channelId, id => {
+  const n = Number(id)
+  if (n && n !== store.activeChId) store.setChannel(n)
+})
 
 onMounted(async () => {
   if (!store.user) { router.push('/'); return }

@@ -223,6 +223,129 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_poll_votes_msg ON poll_votes(message_id);
 `)
 
+// ─── Личные сообщения (DM) ───────────────────────────────
+// DM — это обычный канал с kind = 'dm' без папки. Участники — в channel_members,
+// dm_key = "minId:maxId" не даёт завести два диалога между одной парой.
+try { db.prepare("ALTER TABLE channels ADD COLUMN kind TEXT NOT NULL DEFAULT 'channel'").run() } catch { }
+try { db.prepare('ALTER TABLE channels ADD COLUMN dm_key TEXT').run() } catch { }
+try { db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_dm_key ON channels(dm_key) WHERE dm_key IS NOT NULL').run() } catch { }
+db.exec(`
+  CREATE TABLE IF NOT EXISTS channel_members (
+    channel_id   INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    last_read_id INTEGER NOT NULL DEFAULT 0,
+    opened       INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (channel_id, user_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_channel_members_user ON channel_members(user_id);
+`)
+
+// ─── Закреплённые сообщения ──────────────────────────────
+try { db.prepare('ALTER TABLE messages ADD COLUMN pinned_at INTEGER').run() } catch { }
+try { db.prepare('ALTER TABLE messages ADD COLUMN pinned_by INTEGER REFERENCES users(id) ON DELETE SET NULL').run() } catch { }
+try { db.prepare('CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(channel_id, pinned_at) WHERE pinned_at IS NOT NULL').run() } catch { }
+
+const MAX_PINS_PER_CHANNEL = 50
+const dmKey = (a, b) => {
+  const [x, y] = [Number(a), Number(b)].sort((p, q) => p - q)
+  return `${x}:${y}`
+}
+
+function getChannel(id) {
+  return db.prepare("SELECT id, folder_id, name, icon, COALESCE(kind, 'channel') AS kind, dm_key FROM channels WHERE id = ?").get(id) || null
+}
+
+// Обычный канал видят все авторизованные, DM — только участники
+function canAccessChannel(channelId, userId) {
+  const ch = getChannel(channelId)
+  if (!ch) return false
+  if (ch.kind !== 'dm') return true
+  return !!db.prepare('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?').get(channelId, userId)
+}
+
+const channelMemberIds = (channelId) =>
+  db.prepare('SELECT user_id FROM channel_members WHERE channel_id = ?').all(channelId).map(r => r.user_id)
+
+const getOrCreateDm = db.transaction((userId, peerId) => {
+  const key = dmKey(userId, peerId)
+  let ch = db.prepare('SELECT id FROM channels WHERE dm_key = ?').get(key)
+  let id = ch?.id
+  if (!id) {
+    id = db.prepare("INSERT INTO channels (folder_id, name, icon, sort, kind, dm_key) VALUES (NULL, 'dm', '@', 0, 'dm', ?)")
+      .run(key).lastInsertRowid
+    const ins = db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)')
+    ins.run(id, userId)
+    ins.run(id, peerId)
+  }
+  // Инициатор видит диалог в списке сразу, собеседник — после первого сообщения
+  db.prepare('UPDATE channel_members SET opened = 1 WHERE channel_id = ? AND user_id = ?').run(id, userId)
+  return Number(id)
+})
+
+function dmForUser(channelId, userId) {
+  const me = db.prepare(`
+    SELECT cm.channel_id, cm.last_read_id, cm.opened
+    FROM channel_members cm JOIN channels c ON c.id = cm.channel_id
+    WHERE cm.channel_id = ? AND cm.user_id = ? AND c.kind = 'dm'
+  `).get(channelId, userId)
+  if (!me) return null
+  const peerRow = db.prepare('SELECT user_id FROM channel_members WHERE channel_id = ? AND user_id != ? LIMIT 1').get(channelId, userId)
+  const peerId = peerRow ? peerRow.user_id : userId // диалог с собой = «Избранное»
+  const peer = db.prepare(publicUserSelect('WHERE id = ?')).get(peerId)
+  if (!peer) return null
+  const last = db.prepare(`
+    SELECT id, user_id, text, type, created_at FROM messages
+    WHERE channel_id = ? AND parent_id IS NULL ORDER BY id DESC LIMIT 1
+  `).get(channelId) || null
+  const unread = db.prepare(`
+    SELECT COUNT(*) AS c FROM messages
+    WHERE channel_id = ? AND parent_id IS NULL AND id > ? AND user_id != ?
+  `).get(channelId, me.last_read_id, userId).c
+  return {
+    id: Number(channelId),
+    kind: 'dm',
+    is_self: peerId === userId,
+    peer,
+    last_message: last,
+    unread,
+    last_at: last?.created_at || 0,
+    opened: !!me.opened,
+  }
+}
+
+function getDmsForUser(userId) {
+  const ids = db.prepare(`
+    SELECT cm.channel_id AS id FROM channel_members cm JOIN channels c ON c.id = cm.channel_id
+    WHERE cm.user_id = ? AND c.kind = 'dm'
+  `).all(userId).map(r => r.id)
+  return ids.map(id => dmForUser(id, userId))
+    .filter(d => d && (d.opened || d.last_message))
+    .sort((a, b) => (b.last_at - a.last_at) || (b.id - a.id))
+}
+
+function markChannelRead(channelId, userId) {
+  db.prepare(`
+    UPDATE channel_members
+    SET last_read_id = MAX(last_read_id, COALESCE((SELECT MAX(id) FROM messages WHERE channel_id = ?), 0)),
+        opened = 1
+    WHERE channel_id = ? AND user_id = ?
+  `).run(channelId, channelId, userId)
+}
+
+const openDmFor = (channelId, userId) =>
+  db.prepare('UPDATE channel_members SET opened = 1 WHERE channel_id = ? AND user_id = ?').run(channelId, userId)
+
+const countPins = (channelId) =>
+  db.prepare('SELECT COUNT(*) AS c FROM messages WHERE channel_id = ? AND pinned_at IS NOT NULL').get(channelId).c
+
+function setPinned(messageId, userId, pinned) {
+  if (pinned) {
+    db.prepare('UPDATE messages SET pinned_at = unixepoch(), pinned_by = ? WHERE id = ?').run(userId, messageId)
+  } else {
+    db.prepare('UPDATE messages SET pinned_at = NULL, pinned_by = NULL WHERE id = ?').run(messageId)
+  }
+}
+
 // Дефолтная рабочая зона + привязка "старых" колонок без workspace_id
 const wsCount = db.prepare('SELECT COUNT(*) as c FROM kanban_workspaces').get().c
 if (wsCount === 0) {
@@ -477,8 +600,15 @@ function parseMessageRow(row) {
   }
 }
 
-const MESSAGE_SELECT = `SELECT m.*, u.name as user_name, u.avatar as user_avatar, u.color as user_color
-  FROM messages m JOIN users u ON m.user_id = u.id`
+const MESSAGE_SELECT = `SELECT m.*, u.name as user_name, u.avatar as user_avatar, u.color as user_color,
+    pb.name as pinned_by_name
+  FROM messages m JOIN users u ON m.user_id = u.id
+  LEFT JOIN users pb ON pb.id = m.pinned_by`
+
+// Закреплённые сообщения канала/DM — свежие сверху
+const getPinned = (channelId) =>
+  db.prepare(`${MESSAGE_SELECT} WHERE m.channel_id = ? AND m.pinned_at IS NOT NULL ORDER BY m.pinned_at DESC, m.id DESC LIMIT ${MAX_PINS_PER_CHANNEL}`)
+    .all(channelId).map(parseMessageRow)
 
 // Снимок сообщения для карточки «из чата»: контекст остаётся, даже если
 // сообщение потом удалят из канала
@@ -486,7 +616,8 @@ function messageSnapshot(id) {
   const m = db.prepare(`
     SELECT m.id, m.channel_id, m.parent_id, m.text, m.created_at, m.attachment,
            u.name as user_name, u.avatar as user_avatar, u.color as user_color,
-           ch.name as channel_name, ch.icon as channel_icon
+           CASE WHEN ch.kind = 'dm' THEN 'Личные сообщения' ELSE ch.name END as channel_name,
+           CASE WHEN ch.kind = 'dm' THEN '✉️' ELSE ch.icon END as channel_icon, ch.kind as channel_kind
     FROM messages m JOIN users u ON m.user_id = u.id
     LEFT JOIN channels ch ON ch.id = m.channel_id
     WHERE m.id = ?
@@ -563,6 +694,19 @@ function getUserStats(id) {
 }
 
 module.exports = {
+  // DM и закрепы
+  getChannel,
+  canAccessChannel,
+  channelMemberIds,
+  getOrCreateDm,
+  dmForUser,
+  getDmsForUser,
+  markChannelRead,
+  openDmFor,
+  countPins,
+  setPinned,
+  getPinned,
+  MAX_PINS_PER_CHANNEL,
   getUserStats,
   pollFor,
   votePoll,
@@ -944,7 +1088,8 @@ module.exports = {
       card.source_message = card.source_message_id ? (db.prepare(`
         SELECT m.id, m.channel_id, m.parent_id, m.text, m.created_at, m.attachment,
                u.name as user_name, u.avatar as user_avatar, u.color as user_color,
-               ch.name as channel_name, ch.icon as channel_icon
+               CASE WHEN ch.kind = 'dm' THEN 'Личные сообщения' ELSE ch.name END as channel_name,
+           CASE WHEN ch.kind = 'dm' THEN '✉️' ELSE ch.icon END as channel_icon, ch.kind as channel_kind
         FROM messages m JOIN users u ON m.user_id = u.id
         LEFT JOIN channels ch ON ch.id = m.channel_id
         WHERE m.id = ?

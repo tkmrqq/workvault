@@ -177,7 +177,7 @@ function apply() {
   transition: background .15s ease, color .15s ease, opacity .15s ease;
 }
 .cr-btn:hover { background: var(--hover); color: var(--text); }
-.cr-btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
+.cr-btn.primary { background: var(--accent); border-color: transparent; color: var(--on-accent, #fff); }
 .cr-btn.primary:hover { background: var(--accent-hover, var(--accent)); }
 .cr-btn:disabled { opacity: .5; cursor: not-allowed; }
 </style>

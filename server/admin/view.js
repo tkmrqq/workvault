@@ -2,6 +2,13 @@
 // Чисто шаблон — никакой работы с БД тут быть не должно, только вывод
 // уже готовых данных, которые передаёт router.js.
 
+// Всё пользовательское (имена каналов, юзеров, зон) — только через esc().
+// Раньше имена вставлялись как есть, в т.ч. внутрь onclick="...('${name}')" —
+// канал с апострофом в названии ломал кнопки, а <script> в имени исполнялся.
+const esc = (v) => String(v ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+
 function renderAdminLoginPage({ error }) {
   return `<!DOCTYPE html>
 <html lang="ru">
@@ -33,7 +40,7 @@ function renderAdminLoginPage({ error }) {
 <body>
   <form class="box" method="POST" action="/admin/login">
     <h1>⚙️ WorkVault Admin</h1>
-    ${error ? `<div class="error">${error}</div>` : ''}
+    ${error ? `<div class="error">${esc(error)}</div>` : ''}
     <input type="text" name="name" placeholder="Имя пользователя" autofocus required>
     <input type="password" name="password" placeholder="Пароль" required>
     <button type="submit">Войти</button>
@@ -43,7 +50,60 @@ function renderAdminLoginPage({ error }) {
 </html>`
 }
 
-function renderAdminPage({ stats, users, channels, workspaces, log, me }) {
+function renderChannelsManager(folders, channels) {
+  const msgCount = Object.fromEntries(channels.map(c => [c.id, c.msg_count]))
+  const folderOptions = (selectedId) => folders.map(f =>
+    `<option value="${f.id}"${f.id === selectedId ? ' selected' : ''}>${esc(f.icon)} ${esc(f.name)}</option>`).join('')
+
+  return `
+  <div class="cm">
+    ${folders.map((f, fi) => `
+      <div class="cm-folder" data-folder-id="${f.id}">
+        <div class="cm-row cm-folder-row">
+          <input class="in in-icon" data-field="icon" value="${esc(f.icon)}" maxlength="8" title="Иконка папки">
+          <input class="in in-name" data-field="name" value="${esc(f.name)}" maxlength="64" placeholder="Название папки">
+          <span class="cm-meta">папка · ${(f.channels || []).length} кан.</span>
+          <span class="cm-actions">
+            <button class="btn btn-ghost" data-act="folder-move" data-dir="up" ${fi === 0 ? 'disabled' : ''} title="Выше">↑</button>
+            <button class="btn btn-ghost" data-act="folder-move" data-dir="down" ${fi === folders.length - 1 ? 'disabled' : ''} title="Ниже">↓</button>
+            <button class="btn btn-accent" data-act="folder-save">Сохранить</button>
+            <button class="btn btn-red" data-act="folder-delete" ${(f.channels || []).length ? 'disabled title="Сначала перенесите или удалите каналы"' : ''}>Удалить</button>
+          </span>
+        </div>
+
+        ${(f.channels || []).map((c, ci, arr) => `
+          <div class="cm-row cm-channel-row" data-channel-id="${c.id}" data-name="${esc(c.name)}">
+            <input class="in in-icon" data-field="icon" value="${esc(c.icon)}" maxlength="8" title="Иконка канала">
+            <input class="in in-name" data-field="name" value="${esc(c.name)}" maxlength="64" placeholder="Название канала">
+            <select class="in in-folder" data-field="folderId" title="Папка">${folderOptions(f.id)}</select>
+            <span class="cm-meta">id ${c.id} · ${msgCount[c.id] ?? 0} сообщ.</span>
+            <span class="cm-actions">
+              <button class="btn btn-ghost" data-act="channel-move" data-dir="up" ${ci === 0 ? 'disabled' : ''} title="Выше">↑</button>
+              <button class="btn btn-ghost" data-act="channel-move" data-dir="down" ${ci === arr.length - 1 ? 'disabled' : ''} title="Ниже">↓</button>
+              <button class="btn btn-accent" data-act="channel-save">Сохранить</button>
+              <button class="btn btn-ghost" data-act="channel-clear">Очистить историю</button>
+              <button class="btn btn-red" data-act="channel-delete">Удалить</button>
+            </span>
+          </div>
+        `).join('')}
+
+        <div class="cm-row cm-new-row">
+          <input class="in in-icon" data-field="icon" value="#" maxlength="8">
+          <input class="in in-name" data-field="name" maxlength="64" placeholder="Новый канал в «${esc(f.name)}»">
+          <span class="cm-actions"><button class="btn btn-accent" data-act="channel-create">+ Канал</button></span>
+        </div>
+      </div>
+    `).join('')}
+
+    <div class="cm-row cm-new-row cm-new-folder">
+      <input class="in in-icon" data-field="icon" value="📁" maxlength="8">
+      <input class="in in-name" data-field="name" maxlength="64" placeholder="Новая папка">
+      <span class="cm-actions"><button class="btn btn-accent" data-act="folder-create">+ Папка</button></span>
+    </div>
+  </div>`
+}
+
+function renderAdminPage({ stats, users, channels, folders = [], workspaces, log, me }) {
   return `<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -63,12 +123,13 @@ function renderAdminPage({ stats, users, channels, workspaces, log, me }) {
     td { padding: 8px 12px; border-bottom: 1px solid #1e1e1e }
     tr:hover td { background: #161616 }
     .btn { padding: 4px 10px; border-radius: 6px; border: none; cursor: pointer; font-size: 12px; font-weight: 600; margin-right: 6px }
+    .btn:disabled { opacity: .35; cursor: default }
     .btn-red { background: rgba(224,108,117,.15); color: #e06c75 }
-    .btn-red:hover { background: rgba(224,108,117,.3) }
+    .btn-red:hover:not(:disabled) { background: rgba(224,108,117,.3) }
     .btn-accent { background: rgba(124,106,247,.15); color: #7c6af7 }
-    .btn-accent:hover { background: rgba(124,106,247,.3) }
+    .btn-accent:hover:not(:disabled) { background: rgba(124,106,247,.3) }
     .btn-ghost { background: #1e1e1e; color: #888 }
-    .btn-ghost:hover { background: #262626; color: #ccc }
+    .btn-ghost:hover:not(:disabled) { background: #262626; color: #ccc }
     .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; background: #1e1e1e; color: #888 }
     .badge-admin { background: rgba(124,106,247,.2); color: #a99bff }
     .badge-nopass { background: rgba(224,108,117,.15); color: #e06c75 }
@@ -78,17 +139,39 @@ function renderAdminPage({ stats, users, channels, workspaces, log, me }) {
     .log-time { color: #555; margin-right: 8px }
     .me { color: #666; font-size: 13px; font-weight: 400 }
     .me a { color: #7c6af7; text-decoration: none; margin-left: 10px }
+
+    /* ── Управление каналами ── */
+    .cm { display: flex; flex-direction: column; gap: 14px }
+    .cm-folder { background: #141414; border: 1px solid #222; border-radius: 10px; padding: 6px }
+    .cm-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; flex-wrap: wrap }
+    .cm-folder-row { background: #1a1a1a }
+    .cm-folder-row .in-name { font-weight: 600; color: #fff }
+    .cm-channel-row { padding-left: 28px }
+    .cm-channel-row:hover { background: #181818 }
+    .cm-new-row { padding-left: 28px; opacity: .8 }
+    .cm-new-folder { padding-left: 8px; background: #141414; border: 1px dashed #2a2a2a; border-radius: 10px }
+    .cm-meta { color: #555; font-size: 12px; min-width: 110px }
+    .cm-actions { margin-left: auto; display: flex; gap: 0 }
+    .in { background: #0f0f0f; border: 1px solid #2a2a2a; border-radius: 6px; padding: 6px 8px; color: #eee; font-size: 13px; font-family: inherit }
+    .in:focus { outline: none; border-color: #7c6af7 }
+    .in-icon { width: 46px; text-align: center }
+    .in-name { width: 240px }
+    .in-folder { width: 180px }
+    .in.dirty { border-color: #e8af34 }
+    .toast { position: fixed; bottom: 20px; right: 20px; background: #1a1a1a; border: 1px solid #2a2a2a; color: #ddd; padding: 10px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none }
+    .toast.show { opacity: 1 }
+    .toast.err { border-color: #e06c75; color: #e06c75 }
   </style>
 </head>
 <body>
   <h1>
     ⚙️ WorkVault Admin
-    <span class="me">${me.name}<a href="/admin/logout">Выйти</a></span>
+    <span class="me">${esc(me.name)}<a href="/admin/logout">Выйти</a></span>
   </h1>
 
   <div class="health">
     <div class="dot"></div>
-    Server healthy · uptime ${stats.uptime}
+    Server healthy · uptime ${esc(stats.uptime)}
   </div>
 
   <h2>Статистика</h2>
@@ -100,41 +183,24 @@ function renderAdminPage({ stats, users, channels, workspaces, log, me }) {
     <div class="card"><div class="card-val">${stats.cards}</div><div class="card-label">Задач в канбане</div></div>
     <div class="card"><div class="card-val">${stats.archived}</div><div class="card-label">В архиве</div></div>
     <div class="card"><div class="card-val">${stats.workspaces}</div><div class="card-label">Рабочих зон</div></div>
-    <div class="card"><div class="card-val">${stats.dbSize}</div><div class="card-label">Размер БД</div></div>
+    <div class="card"><div class="card-val">${esc(stats.dbSize)}</div><div class="card-label">Размер БД</div></div>
   </div>
+
+  <h2>Каналы и папки</h2>
+  ${renderChannelsManager(folders, channels)}
 
   <h2>Рабочие зоны канбана</h2>
   <table>
     <thead><tr><th>ID</th><th>Зона</th><th>Колонок</th><th>Активных задач</th><th>Действия</th></tr></thead>
     <tbody>
       ${workspaces.map(w => `
-        <tr>
+        <tr data-id="${w.id}" data-name="${esc(w.name)}">
           <td><span class="badge">${w.id}</span></td>
-          <td>${w.name}</td>
+          <td>${esc(w.icon || '')} ${esc(w.name)}</td>
           <td>${w.col_count}</td>
           <td>${w.card_count}</td>
           <td>
-            ${workspaces.length > 1 ? `<button class="btn btn-red" onclick="deleteWorkspace(${w.id}, '${w.name}')">Удалить</button>` : '—'}
-          </td>
-        </tr>
-      `).join('')}
-    </tbody>
-  </table>
-
-  <h2>Каналы</h2>
-  <table>
-    <thead><tr><th>ID</th><th>Канал</th><th>Папка</th><th>Сообщений</th><th>Действия</th></tr></thead>
-    <tbody>
-      ${channels.map(c => `
-        <tr>
-          <td><span class="badge">${c.id}</span></td>
-          <td>${c.name}</td>
-          <td>${c.folder || '—'}</td>
-          <td>${c.msg_count}</td>
-          <td>
-            <button class="btn btn-red" onclick="clearHistory(${c.id}, '${c.name}')">
-              Очистить историю
-            </button>
+            ${workspaces.length > 1 ? `<button class="btn btn-red" data-act="workspace-delete">Удалить</button>` : '—'}
           </td>
         </tr>
       `).join('')}
@@ -146,19 +212,19 @@ function renderAdminPage({ stats, users, channels, workspaces, log, me }) {
     <thead><tr><th>ID</th><th>Аватар</th><th>Имя</th><th>Статус</th><th>Действия</th></tr></thead>
     <tbody>
       ${users.map(u => `
-        <tr>
+        <tr data-id="${u.id}" data-name="${esc(u.name)}">
           <td><span class="badge">${u.id}</span></td>
-          <td>${u.avatar}</td>
-          <td style="color:${u.color}">${u.name}</td>
+          <td>${esc(u.avatar)}</td>
+          <td style="color:${/^#[0-9a-f]{3,8}$/i.test(u.color || '') ? u.color : 'inherit'}">${esc(u.name)}</td>
           <td>
             ${u.role === 'admin' ? '<span class="badge badge-admin">admin</span>' : ''}
             ${!u.has_password ? '<span class="badge badge-nopass">без пароля</span>' : ''}
           </td>
           <td>
             ${u.role === 'admin'
-              ? `<button class="btn btn-ghost" onclick="setRole(${u.id}, 'member', '${u.name}')">Снять админку</button>`
-              : `<button class="btn btn-accent" onclick="setRole(${u.id}, 'admin', '${u.name}')">Сделать админом</button>`}
-            <button class="btn btn-red" onclick="deleteUser(${u.id}, '${u.name}')">Удалить</button>
+              ? `<button class="btn btn-ghost" data-act="user-role" data-role="member">Снять админку</button>`
+              : `<button class="btn btn-accent" data-act="user-role" data-role="admin">Сделать админом</button>`}
+            <button class="btn btn-red" data-act="user-delete">Удалить</button>
           </td>
         </tr>
       `).join('')}
@@ -168,43 +234,133 @@ function renderAdminPage({ stats, users, channels, workspaces, log, me }) {
   <h2>Журнал действий</h2>
   <div>
     ${log.length ? log.map(l => `
-      <div class="log-row"><span class="log-time">${new Date(l.created_at * 1000).toLocaleString('ru-RU')}</span>${l.action}${l.details ? ' — ' + l.details : ''}</div>
+      <div class="log-row"><span class="log-time">${new Date(l.created_at * 1000).toLocaleString('ru-RU')}</span>${esc(l.action)}${l.details ? ' — ' + esc(l.details) : ''}</div>
     `).join('') : '<div class="log-row">Пока пусто</div>'}
   </div>
 
+  <div class="toast" id="toast"></div>
+
   <script>
-    async function clearHistory(channelId, name) {
-      if (!confirm('Очистить всю историю канала #' + name + '?')) return
-      const r = await fetch('/admin/api/clear-history/' + channelId, { method: 'POST' })
-      const d = await r.json()
-      if (d.ok) { alert('Удалено сообщений: ' + d.deleted); location.reload() }
-      else alert('Ошибка: ' + d.error)
+    const toastEl = document.getElementById('toast')
+    let toastTimer
+    function toast(text, isErr) {
+      toastEl.textContent = text
+      toastEl.className = 'toast show' + (isErr ? ' err' : '')
+      clearTimeout(toastTimer)
+      toastTimer = setTimeout(() => { toastEl.className = 'toast' }, 2200)
     }
-    async function deleteUser(id, name) {
-      if (!confirm('Удалить пользователя ' + name + '?')) return
-      const r = await fetch('/admin/api/delete-user/' + id, { method: 'POST' })
-      const d = await r.json()
-      if (d.ok) { alert('Удалён'); location.reload() }
-      else alert('Ошибка: ' + d.error)
-    }
-    async function setRole(id, role, name) {
-      const verb = role === 'admin' ? 'Выдать права администратора' : 'Снять права администратора у'
-      if (!confirm(verb + ' ' + name + '?')) return
-      const r = await fetch('/admin/api/set-role/' + id, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role })
+
+    async function api(url, body) {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {})
       })
-      const d = await r.json()
-      if (d.ok) location.reload()
-      else alert('Ошибка: ' + d.error)
+      let d = {}
+      try { d = await r.json() } catch (e) {}
+      if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status))
+      return d
     }
-    async function deleteWorkspace(id, name) {
-      if (!confirm('Удалить зону «' + name + '» вместе со всеми колонками и задачами?')) return
-      const r = await fetch('/admin/api/delete-workspace/' + id, { method: 'POST' })
-      const d = await r.json()
-      if (d.ok) { alert('Удалена'); location.reload() }
-      else alert('Ошибка: ' + (d.error || 'не удалось'))
+
+    const val = (row, field) => row.querySelector('[data-field="' + field + '"]')?.value ?? ''
+
+    // Подсвечиваем несохранённые правки; Enter в поле = «Сохранить»
+    document.addEventListener('input', (e) => {
+      if (e.target.classList.contains('in') && e.target.closest('.cm-folder-row, .cm-channel-row')) e.target.classList.add('dirty')
+    })
+    document.addEventListener('change', (e) => {
+      if (e.target.matches('select.in')) e.target.classList.add('dirty')
+    })
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || !e.target.classList.contains('in')) return
+      const row = e.target.closest('.cm-row')
+      row?.querySelector('[data-act$="-save"], [data-act$="-create"]')?.click()
+    })
+
+    const actions = {
+      async 'folder-create'(btn) {
+        const row = btn.closest('.cm-row')
+        await api('/admin/api/folders', { name: val(row, 'name'), icon: val(row, 'icon') })
+        location.reload()
+      },
+      async 'folder-save'(btn) {
+        const box = btn.closest('.cm-folder'), row = btn.closest('.cm-row')
+        await api('/admin/api/folders/' + box.dataset.folderId, { name: val(row, 'name'), icon: val(row, 'icon') })
+        row.querySelectorAll('.dirty').forEach(el => el.classList.remove('dirty'))
+        toast('Папка сохранена')
+      },
+      async 'folder-move'(btn) {
+        const box = btn.closest('.cm-folder')
+        await api('/admin/api/folders/' + box.dataset.folderId + '/move', { dir: btn.dataset.dir })
+        location.reload()
+      },
+      async 'folder-delete'(btn) {
+        const box = btn.closest('.cm-folder'), row = btn.closest('.cm-row')
+        if (!confirm('Удалить папку «' + val(row, 'name') + '»?')) return
+        await api('/admin/api/folders/' + box.dataset.folderId + '/delete')
+        location.reload()
+      },
+      async 'channel-create'(btn) {
+        const box = btn.closest('.cm-folder'), row = btn.closest('.cm-row')
+        await api('/admin/api/channels', { folderId: Number(box.dataset.folderId), name: val(row, 'name'), icon: val(row, 'icon') })
+        location.reload()
+      },
+      async 'channel-save'(btn) {
+        const row = btn.closest('.cm-row')
+        const box = btn.closest('.cm-folder')
+        const folderId = Number(val(row, 'folderId'))
+        await api('/admin/api/channels/' + row.dataset.channelId, { name: val(row, 'name'), icon: val(row, 'icon'), folderId })
+        if (folderId !== Number(box.dataset.folderId)) return location.reload()
+        row.dataset.name = val(row, 'name')
+        row.querySelectorAll('.dirty').forEach(el => el.classList.remove('dirty'))
+        toast('Канал сохранён')
+      },
+      async 'channel-move'(btn) {
+        const row = btn.closest('.cm-row')
+        await api('/admin/api/channels/' + row.dataset.channelId + '/move', { dir: btn.dataset.dir })
+        location.reload()
+      },
+      async 'channel-clear'(btn) {
+        const row = btn.closest('.cm-row')
+        if (!confirm('Очистить всю историю канала #' + row.dataset.name + '?')) return
+        const d = await api('/admin/api/clear-history/' + row.dataset.channelId)
+        alert('Удалено сообщений: ' + d.deleted); location.reload()
+      },
+      async 'channel-delete'(btn) {
+        const row = btn.closest('.cm-row')
+        if (!confirm('Удалить канал #' + row.dataset.name + ' вместе со всеми сообщениями? Это необратимо.')) return
+        await api('/admin/api/channels/' + row.dataset.channelId + '/delete')
+        location.reload()
+      },
+      async 'user-role'(btn) {
+        const row = btn.closest('tr'), role = btn.dataset.role
+        const verb = role === 'admin' ? 'Выдать права администратора' : 'Снять права администратора у'
+        if (!confirm(verb + ' ' + row.dataset.name + '?')) return
+        await api('/admin/api/set-role/' + row.dataset.id, { role })
+        location.reload()
+      },
+      async 'user-delete'(btn) {
+        const row = btn.closest('tr')
+        if (!confirm('Удалить пользователя ' + row.dataset.name + '?')) return
+        await api('/admin/api/delete-user/' + row.dataset.id)
+        alert('Удалён'); location.reload()
+      },
+      async 'workspace-delete'(btn) {
+        const row = btn.closest('tr')
+        if (!confirm('Удалить зону «' + row.dataset.name + '» вместе со всеми колонками и задачами?')) return
+        await api('/admin/api/delete-workspace/' + row.dataset.id)
+        alert('Удалена'); location.reload()
+      }
     }
+
+    document.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-act]')
+      if (!btn || btn.disabled || !actions[btn.dataset.act]) return
+      btn.disabled = true
+      try { await actions[btn.dataset.act](btn) }
+      catch (err) { toast('Ошибка: ' + err.message, true) }
+      finally { btn.disabled = false }
+    })
   <\/script>
 </body>
 </html>`

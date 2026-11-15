@@ -476,7 +476,7 @@ h1 { font-size: var(--text-xl); font-weight: 700; margin-bottom: var(--space-1);
 
 .login-btn {
   width: 100%; padding: var(--space-3) var(--space-4);
-  background: var(--accent); color: white;
+  background: var(--accent); color: var(--on-accent, #fff);
   border-radius: var(--radius-lg);
   font-size: var(--text-sm); font-weight: 700;
   transition: all var(--transition);

@@ -14,6 +14,7 @@
         <span v-if="authorStatus" class="msg-status" :title="authorStatus.text || 'Статус'">{{ authorStatus.emoji || '💬' }}</span>
         <span class="msg-time">{{ formatTime(msg.created_at) }}</span>
         <span v-if="msg.edited" class="msg-edited">(ред.)</span>
+        <span v-if="msg.pinned_at && !msg.parent_id" class="msg-pinned" :title="msg.pinned_by_name ? `Закрепил(а): ${msg.pinned_by_name}` : 'Закреплено'"><Pin :size="11" :stroke-width="2.4" /></span>
       </div>
 
       <!-- Text -->
@@ -180,7 +181,7 @@ import { uiPreferences } from '@/composables/useUiPreferences'
 import { openContextMenu, shouldUseNativeMenu, copyText } from '@/composables/useContextMenu'
 import ProfileModal from './ProfileModal.vue'
 import {
-  Download, SmilePlus, Pencil, Trash2, ListPlus, ListChecks, Check, MessagesSquare, ChevronRight, Copy, AtSign, User,
+  Download, SmilePlus, Pencil, Trash2, ListPlus, ListChecks, Check, MessagesSquare, ChevronRight, Copy, AtSign, User, Pin, PinOff,
   FileArchive, FileText, FileSpreadsheet, Music, Film, Image as ImageIcon, File as FileIcon
 } from 'lucide-vue-next'
 
@@ -428,6 +429,11 @@ function submitEdit() {
 }
 function pick(emoji) { store.toggleReaction(props.msg.id, emoji); showPicker.value = false }
 
+async function togglePin(m, pinned) {
+  try { await store.pinMessage(m.id, pinned) }
+  catch (e) { window.alert(e.message || 'Не удалось изменить закреп') }
+}
+
 // ПКМ по сообщению: своё меню (и в браузере, и в Electron). Для ссылок, картинок,
 // выделенного текста и по Shift+ПКМ остаётся системное меню.
 function onContextMenu(e) {
@@ -443,6 +449,9 @@ function onContextMenu(e) {
       : { label: 'Создать задачу', icon: ListPlus, action: makeTask, disabled: creatingTask.value },
     !own && { label: 'Упомянуть автора', icon: AtSign,
       action: () => store.insertIntoComposer('@' + m.user_name + ' ', props.inThread ? (m.parent_id || m.id) : null) },
+    !props.inThread && !m.parent_id && (m.pinned_at
+      ? { label: 'Открепить', icon: PinOff, action: () => togglePin(m, false) }
+      : { label: 'Закрепить', icon: Pin, action: () => togglePin(m, true) }),
     m.text && { label: 'Копировать текст', icon: Copy, action: () => copyText(m.text) },
     { label: 'Профиль автора', icon: User, action: () => openProfile(m.user_id) },
     own && { type: 'separator' },
@@ -594,6 +603,7 @@ function onContextMenu(e) {
 .msg-name { font-size: var(--text-sm); font-weight: 700; }
 .msg-time { font-size: var(--text-xs); color: var(--text-faint); }
 .msg-edited { font-size: 10px; color: var(--text-faint); }
+.msg-pinned { display: inline-flex; align-items: center; color: var(--accent); opacity: .85; }
 .msg-status { font-size: 13px; line-height: 1; cursor: default; }
 
 .msg-text { font-size: var(--text-sm); line-height: 1.6; color: var(--text); word-break: break-word; }
@@ -666,7 +676,7 @@ function onContextMenu(e) {
   border: 1px solid var(--border); color: var(--text-muted); transition: all var(--transition);
 }
 .edit-btn:hover { background: var(--hover); color: var(--text); }
-.edit-btn.accent { background: var(--accent); color: white; border-color: var(--accent); }
+.edit-btn.accent { background: var(--accent); color: var(--on-accent, #fff); border-color: var(--accent); }
 
 /* Image */
 .msg-img-wrap { margin-top: var(--space-2); }
