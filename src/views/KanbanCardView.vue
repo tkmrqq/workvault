@@ -100,7 +100,7 @@
             <!-- Edit mode -->
             <template v-else>
               <input v-model="edit.title" class="field-input" placeholder="Название" />
-              <MarkdownEditor v-model="edit.description" placeholder="Описание..." :rows="4" />
+              <MarkdownEditor v-model="edit.description" placeholder="Описание..." :rows="4" :title="edit.title || card.title" />
               <div class="edit-row">
                 <div class="edit-group">
                   <label class="field-label">Приоритет</label>
@@ -199,14 +199,14 @@
               <button v-if="activeTagFilters.length" class="tags-filter-clear" @click="activeTagFilters = []">Сбросить</button>
             </div>
 
-            <div class="subtasks-board">
+            <div class="subtasks-board" :class="{ 'no-anim': !uiPreferences.animationsEnabled }">
               <div
-                v-for="col in subtaskCols"
+                v-for="(col, colIdx) in subtaskCols"
                 :key="col.status"
                 class="sub-col"
-                @dragover.prevent="onSubColDragOver($event, col)"
-                @drop.prevent="onSubDrop($event, col.status)"
-                :class="{ 'drag-over': subDragOverCol.status === col.status }"
+                :data-col-id="col.status"
+                :style="{ '--i': colIdx }"
+                :class="{ 'drag-over': subDrag.isOverForeign(col) }"
               >
                 <div class="sub-col-header">
                   <div class="col-dot" :style="{ background: col.color }"></div>
@@ -215,19 +215,24 @@
                 </div>
 
                 <div class="sub-col-cards">
-                  <div v-if="subDragOverCol.status === col.status && col.items.length" class="drop-line" :style="{ top: subDragOverCol.y + 'px' }"></div>
-                  <TransitionGroup name="sub-card" tag="div" class="sub-col-cards-list" :css="uiPreferences.animationsEnabled">
+                  <TransitionGroup name="sub-card" tag="div" class="sub-col-cards-list" :css="uiPreferences.animationsEnabled && !subDrag.state.instant" @before-leave="positionLeavingCard">
+                  <div v-if="!subDrag.renderCards(col).length" :key="`empty-${col.status}`" class="sub-col-empty">{{ activeTagFilters.length && (card.subtasks || []).some(s => s.status === col.status) ? 'Нет подзадач по фильтру' : 'Перетащите сюда' }}</div>
+                  <template v-for="sub in subDrag.renderCards(col)" :key="sub.id">
                   <div
-                    v-for="sub in col.items"
-                    :key="sub.id"
+                    v-if="sub.placeholder"
+                    class="sub-card-placeholder"
+                    :style="{ height: subDrag.state.height + 'px' }"
+                    aria-hidden="true"
+                  ></div>
+                  <div
+                    v-else
                     class="sub-card"
-                    :draggable="!activeTagFilters.length"
-                    @dragstart="onSubDragStart($event, sub)"
-                    @dragend="onSubDragEnd"
-                    :class="{ dragging: subDragging?.id === sub.id }"
+                    :data-card-id="sub.id"
+                    :class="{ 'can-drag': !activeTagFilters.length }"
+                    @pointerdown="subDrag.onPointerDown($event, sub, col.status)"
                     @click="openEditSubtask(sub)"
                   >
-                    <div v-if="!activeTagFilters.length" class="sub-card-drag-handle" @mousedown="subDragHandleGrabbed = true" title="Потяни, чтобы переместить">
+                    <div v-if="!activeTagFilters.length" class="sub-card-drag-handle" title="Потяни, чтобы переместить">
                       <GripVertical :size="11" :stroke-width="2" />
                     </div>
                     <div class="sub-card-priority" :class="sub.priority">
@@ -246,8 +251,8 @@
                       {{ sub.assignee_name }}
                     </div>
                   </div>
+                  </template>
                   </TransitionGroup>
-                  <div v-if="!col.items.length" class="sub-col-empty" :class="{ 'drag-over': subDragOverCol.status === col.status }">Перетащите сюда</div>
                 </div>
               </div>
             </div>
@@ -268,7 +273,7 @@
     <!-- Subtask modal -->
     <Teleport to="body">
       <div v-if="subModal.open" class="modal-overlay" @click.self="closeSubModal">
-        <div class="modal">
+        <div class="modal sub-modal">
           <div class="modal-header">
             <h2>{{ subModal.mode === 'create' ? 'Новая подзадача' : 'Редактировать подзадачу' }}</h2>
             <button class="modal-close" @click="closeSubModal"><X :size="14" :stroke-width="2.5" /></button>
@@ -278,7 +283,7 @@
             <input v-model="subModal.title" class="field-input" placeholder="Что нужно сделать?" autofocus @keydown.enter="saveSubtask" @keydown.esc="closeSubModal" />
 
             <label class="field-label">Описание</label>
-            <MarkdownEditor v-model="subModal.description" placeholder="Подробности..." :rows="3" />
+            <MarkdownEditor v-model="subModal.description" placeholder="Подробности... Поддерживается Markdown" :rows="4" :title="subModal.title || 'Новая подзадача'" />
 
             <div class="edit-row">
               <div class="edit-group">
@@ -434,6 +439,7 @@ import TitleBar from '@/components/TitleBar.vue'
 import Sidebar  from '@/components/Sidebar.vue'
 import MobileMenuButton from '@/components/MobileMenuButton.vue'
 import MarkdownEditor from '@/components/MarkdownEditor.vue'
+import { useKanbanDrag } from '@/composables/useKanbanDrag'
 import { renderMarkdown } from '@/composables/useMarkdown'
 import { getApiBase } from '@/lib/apiBase'
 import { uiPreferences } from '@/composables/useUiPreferences'
@@ -663,73 +669,62 @@ const colColor = computed(() => columns.value.find(c => c.id === card.value?.col
 const isOverdue = computed(() => card.value?.due_date && card.value.due_date * 1000 < Date.now())
 
 // ─── Drag & Drop subtasks ─────────────────────────────────
-const subDragging    = ref(null)
-const subDragOverCol = reactive({ status: null, index: null, y: 0 })
+// Тот же pointer-DnD, что и в основном канбане (composables/useKanbanDrag.js):
+// призрак с наклоном, слот на месте вставки, FLIP соседей, «посадка» в слот,
+// автоскролл, тач за ручку, Esc — отмена. Здесь только применение переноса.
+const subDrag = useKanbanDrag({
+  canDrag: () => !activeTagFilters.value.length,
+  animated: () => !!uiPreferences.animationsEnabled,
+  onDrop: (sub, status, index) => { moveSubtask(sub, status, index) },
+  selectors: {
+    board: '.subtasks-board',
+    card: '.sub-card',
+    list: '.sub-col-cards-list',
+    scroller: '.sub-col-cards',
+    placeholder: '.sub-card-placeholder',
+    handle: '.sub-card-drag-handle'
+  },
+  getItems: col => col.items,
+  getColKey: col => col.status
+})
 
-const subDragHandleGrabbed = ref(false)
+// Уходящая карточка становится position:absolute — фиксируем её на месте,
+// иначе она прыгает в левый верхний угол списка (как в KanbanView).
+function positionLeavingCard(element) {
+  const parent = element.parentElement
+  if (!parent) return
+  const rect = element.getBoundingClientRect()
+  const parentRect = parent.getBoundingClientRect()
+  element.style.top = `${rect.top - parentRect.top + parent.scrollTop}px`
+  element.style.left = `${rect.left - parentRect.left + parent.scrollLeft}px`
+  element.style.width = `${rect.width}px`
+}
 
-function onSubDragStart(e, sub) {
-  if (!subDragHandleGrabbed.value) { e.preventDefault(); return }
-  subDragging.value = sub
-  e.dataTransfer.effectAllowed = 'move'
-}
-function onSubDragEnd() {
-  subDragging.value = null
-  subDragOverCol.status = null
-  subDragHandleGrabbed.value = false
-}
-function onSubColDragOver(e, col) {
-  if (!subDragging.value || activeTagFilters.value.length) return
-  const container = e.currentTarget.querySelector('.sub-col-cards')
-  const containerRect = container.getBoundingClientRect()
-  const cardEls = [...container.querySelectorAll('.sub-card:not(.dragging)')]
-  let index = cardEls.length
-  let y = null
-  for (let i = 0; i < cardEls.length; i++) {
-    const rect = cardEls[i].getBoundingClientRect()
-    if (e.clientY < rect.top + rect.height / 2) {
-      index = i
-      y = rect.top - containerRect.top + container.scrollTop - 4
-      break
-    }
-  }
-  if (y === null) {
-    y = cardEls.length
-      ? cardEls[cardEls.length - 1].getBoundingClientRect().bottom - containerRect.top + container.scrollTop + 4
-      : 8
-  }
-  subDragOverCol.status = col.status
-  subDragOverCol.index = index
-  subDragOverCol.y = y
-}
-async function onSubDrop(e, status) {
-  if (!subDragging.value) return
-  const sub = subDragging.value
-  const targetStatus = subDragOverCol.status ?? status
-  let insertIndex = subDragOverCol.index ?? 0
-  subDragging.value = null; subDragOverCol.status = null
-
+// Синхронная часть (до первого await) сразу меняет card.subtasks — composable
+// рассчитывает на это, чтобы подзадача встала ровно в слот без лишнего прыжка.
+async function moveSubtask(sub, targetStatus, insertIndex) {
   const previousSubtasks = card.value.subtasks
 
-  // Оптимистично: убираем подзадачу из старого места и вставляем в новое,
-  // индекс уже посчитан по карточкам БЕЗ учёта перетаскиваемой (см. onSubColDragOver)
+  // Индекс посчитан по карточкам БЕЗ учёта перетаскиваемой.
   const all = [...card.value.subtasks]
   const sourceIdx = all.findIndex(s => s.id === sub.id)
-  if (sourceIdx !== -1) all.splice(sourceIdx, 1)
+  if (sourceIdx === -1) return
+  const sameCol = all[sourceIdx].status === targetStatus
+  const sourcePos = all.filter(s => s.status === targetStatus).findIndex(s => s.id === sub.id)
+  if (sameCol && sourcePos === insertIndex) return // отпустили там же — запрос не нужен
+  all.splice(sourceIdx, 1)
 
   const targetItems = all.filter(s => s.status === targetStatus)
   insertIndex = Math.max(0, Math.min(insertIndex, targetItems.length))
   const targetBefore = targetItems[insertIndex]
-  const updatedSub = { ...sub, status: targetStatus }
   const insertAt = targetBefore ? all.findIndex(s => s.id === targetBefore.id) : all.length
-  all.splice(insertAt, 0, updatedSub)
+  all.splice(insertAt, 0, { ...sub, status: targetStatus })
   card.value.subtasks = all
 
-  // Реорганизуем позиции
   const payload = []
   STATUSES.forEach(col => {
-    card.value.subtasks.filter(s => s.status === col.status)
-      .forEach((s, i) => payload.push({ id: s.id, status: s.status, card_id: s.card_id }))
+    all.filter(s => s.status === col.status)
+      .forEach(s => payload.push({ id: s.id, status: s.status, card_id: s.card_id }))
   })
   const r = await apiFetch(`${API}/api/kanban/subtasks/reorder`, {
     method: 'POST',
@@ -949,7 +944,6 @@ function formatDate(ts) {
 }
 
 let offSocket
-function resetSubDragHandle() { subDragHandleGrabbed.value = false }
 onMounted(async () => {
   if (!store.user) { router.push('/'); return }
   if (!store.folders.length) await store.fetchFolders()
@@ -963,12 +957,11 @@ onMounted(async () => {
   if (ur) users.value   = await ur.json()
   if (br) columns.value = await br.json()
   if (tr) allTags.value = await tr.json()
-  window.addEventListener('mouseup', resetSubDragHandle)
   const socket = store.getSocket()
   if (socket) {
     socket.on('kanban:card:update', (cardId) => {
       if (String(cardId) !== String(route.params.cardId)) return
-      if (subDragging.value) return // не дёргаем карточку во время перетаскивания подзадачи
+      if (subDrag.state.active) return // не дёргаем карточку во время перетаскивания подзадачи
       loadCard()
     })
     offSocket = () => socket.off('kanban:card:update')
@@ -977,7 +970,7 @@ onMounted(async () => {
 onUnmounted(() => {
   offSocket?.()
   window.removeEventListener('beforeunload', handleBeforeUnload)
-  window.removeEventListener('mouseup', resetSubDragHandle)
+  subDrag.destroy()
 })
 </script>
 
@@ -1197,9 +1190,13 @@ onUnmounted(() => {
   border-radius: var(--radius-lg);
   display: flex; flex-direction: column;
   max-height: 100%;
-  transition: border-color .15s;
+  transition: border-color var(--dur, .2s) var(--ease-out, ease), background-color var(--dur, .2s) var(--ease-out, ease), box-shadow var(--dur, .2s) var(--ease-out, ease);
+  animation: subColIn var(--dur-slow, .36s) var(--ease-out, ease) both;
+  animation-delay: calc(var(--i, 0) * 45ms);
 }
-.sub-col.drag-over { border-color: var(--accent); background: var(--accent-soft); }
+@keyframes subColIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.subtasks-board.no-anim .sub-col { animation: none; }
+.sub-col.drag-over { border-color: var(--accent-line); background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface)); }
 .sub-col-header {
   display: flex; align-items: center; gap: 8px;
   padding: 10px 12px 8px; flex-shrink: 0;
@@ -1216,27 +1213,34 @@ onUnmounted(() => {
   display: flex; flex-direction: column; gap: 6px;
   padding: 4px 8px 10px; overflow-y: auto; flex: 1;
 }
-.sub-col-cards-list { display: flex; flex-direction: column; gap: 6px; }
-.sub-card-move { transition: transform .25s ease; }
+.sub-col-cards-list { display: flex; flex-direction: column; gap: 6px; position: relative; min-height: 100%; }
 
-.drop-line {
-  position: absolute; left: 8px; right: 8px;
-  height: 3px; border-radius: 2px;
-  background: var(--accent);
-  pointer-events: none;
-  z-index: 5;
-  transition: top .08s ease;
+/* Анимации — один в один с основным канбаном (.k-card-*) */
+.sub-card-move { transition: transform .3s var(--ease-out, cubic-bezier(.2,.8,.2,1)); will-change: transform; }
+.sub-card-enter-active { transition: opacity .24s ease, transform .24s cubic-bezier(.2,.75,.25,1); }
+.sub-card-leave-active { transition: opacity .2s ease, transform .2s ease; position: absolute; pointer-events: none; }
+.sub-card-enter-from { opacity: 0; transform: translateY(5px) scale(.99); }
+.sub-card-leave-to { opacity: 0; transform: translateY(-3px) scale(.985); }
+
+/* Слот на месте будущей вставки */
+.sub-card-placeholder {
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  border: 1.5px dashed var(--accent-line);
+  background: color-mix(in srgb, var(--accent-soft) 55%, transparent);
+  transition: height var(--dur, .2s) var(--ease-out, ease);
 }
+.sub-card-placeholder.sub-card-enter-from { opacity: 0; transform: scaleY(.6); }
+
 .sub-col-empty {
   margin: 4px 4px 8px; padding: 14px 8px;
   border: 1.5px dashed var(--border); border-radius: var(--radius-md);
   text-align: center; font-size: 11px; color: var(--text-faint);
-  transition: all var(--transition);
+  transition: opacity .22s ease, transform .22s ease, border-color var(--transition), color var(--transition);
 }
-.sub-col-empty.drag-over {
-  border-color: var(--accent); border-style: solid;
-  background: var(--accent-soft); color: var(--accent);
-}
+.sub-col-empty.sub-card-enter-from,
+.sub-col-empty.sub-card-leave-to { opacity: 0; transform: translateY(5px); }
+.sub-col.drag-over .sub-col-empty { border-color: var(--accent-line); color: var(--accent); }
 
 /* Error toast */
 .api-error-toast {
@@ -1252,13 +1256,31 @@ onUnmounted(() => {
   position: relative;
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: var(--radius-md); padding: 8px 24px 8px 10px;
-  cursor: pointer; transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease;
+  cursor: pointer; transition: box-shadow .18s ease, border-color .18s ease, translate .18s var(--ease-out, ease);
   user-select: none;
-  will-change: transform;
+  -webkit-user-drag: none;
 }
-.sub-card:hover { box-shadow: var(--shadow-md); border-color: var(--accent-line); transform: translateY(-2px); }
-.sub-card:active { transform: translateY(0) scale(.99); }
-.sub-card.dragging { opacity: .4; transition: none; }
+/* hover через отдельное свойство translate — не конфликтует с transform от FLIP и призрака */
+.sub-card:hover { box-shadow: var(--shadow-md); border-color: var(--accent-line); translate: 0 -1px; }
+.sub-card:active { opacity: .92; }
+
+/* «Призрак», который едет за курсором (лежит в body, position: fixed) */
+.sub-card.drag-ghost {
+  position: fixed;
+  top: 0; left: 0;
+  margin: 0;
+  z-index: 10000;
+  pointer-events: none;
+  cursor: grabbing;
+  transition: none;
+  translate: none;
+  will-change: transform;
+  transform-origin: 50% 40%;
+  border-color: var(--accent-line);
+  box-shadow: 0 18px 40px -12px rgba(0,0,0,.35), 0 4px 12px -4px rgba(0,0,0,.2);
+}
+.sub-card.drag-ghost .sub-card-drag-handle { opacity: 1; color: var(--accent); }
+.sub-card.drag-ghost.drag-ghost-landed { box-shadow: var(--shadow-md); }
 .sub-card-drag-handle {
   position: absolute; top: 6px; right: 6px;
   width: 15px; height: 15px; display: flex; align-items: center; justify-content: center;
@@ -1269,7 +1291,9 @@ onUnmounted(() => {
 .sub-card-drag-handle:hover { color: var(--accent); }
 .sub-card-drag-handle:active { cursor: grabbing; }
 @media (hover: none) {
-  .sub-card-drag-handle { opacity: 1; pointer-events: auto; }
+  /* тач: hover ненадёжен — ручка видна всегда, увеличена и не скроллит колонку */
+  .sub-card-drag-handle { opacity: 1; pointer-events: auto; touch-action: none; width: 26px; height: 26px; top: 2px; right: 2px; }
+  .sub-card:hover { translate: none; }
 }
 .sub-card-priority {
   font-size: 9px; font-weight: 700; padding: 1px 6px;
@@ -1354,6 +1378,8 @@ onUnmounted(() => {
 @keyframes modalIn { from { opacity: 0; transform: scale(.96) translateY(8px); } to { opacity: 1; transform: scale(1) translateY(0); } }
 .modal-title-row { display: flex; align-items: center; gap: 8px; font-size: var(--text-base); font-weight: 700; }
 .list-modal { width: min(560px, 100%); max-height: 86vh; }
+/* подзадача часто с длинным md-описанием — модалка шире; для совсем большого текста есть «Развернуть» */
+.sub-modal { width: min(640px, 100%); }
 .list-modal-body { max-height: 74vh; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
 .list-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .list-section-actions { display: flex; gap: 6px; }

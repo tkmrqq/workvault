@@ -33,8 +33,29 @@ function edgeSpeed(p, min, max) {
  * @param {() => boolean} opts.animated  — включены ли анимации в настройках
  * @param {(card, colId: string, index: number, fromColId: string) => void} opts.onDrop
  *        — СИНХРОННО применяет перенос к локальному board (запрос на сервер можно отправить внутри асинхронно)
+ * @param {object} [opts.selectors] — классы разметки; по умолчанию — основной канбан.
+ *        Подзадачи передают свои (.sub-card, .sub-col-cards, …), механика та же.
+ * @param {(col) => Array} [opts.getItems] — карточки колонки для рендера (по умолчанию col.visibleCards)
+ * @param {(col) => string|number} [opts.getColKey] — ключ колонки = значение data-col-id (по умолчанию col.id)
  */
-export function useKanbanDrag({ canDrag, animated, onDrop }) {
+const DEFAULT_SELECTORS = {
+  board: '.kanban-board',          // горизонтальный скролл колонок
+  card: '.kanban-card',            // карточка (у реальных есть data-card-id)
+  list: '.col-cards-list',         // TransitionGroup со списком карточек
+  scroller: '.col-cards',          // вертикальный скролл колонки
+  placeholder: '.card-placeholder',
+  handle: '.card-drag-handle'
+}
+
+export function useKanbanDrag({
+  canDrag,
+  animated,
+  onDrop,
+  selectors = {},
+  getItems = col => col.visibleCards,
+  getColKey = col => col.id
+}) {
+  const sel = { ...DEFAULT_SELECTORS, ...selectors }
   const state = reactive({
     active: false,     // идёт перетаскивание
     instant: false,    // на один кадр выключаем CSS-переходы TransitionGroup (подмена карточка ↔ слот)
@@ -62,7 +83,7 @@ export function useKanbanDrag({ canDrag, animated, onDrop }) {
     if (e.button !== 0 || !canDrag()) return
     if (e.target.closest('button, a, input, textarea, select, [contenteditable]')) return
     // На тач-экранах свайп по карточке — это скролл колонки, поэтому тянем только за ручку.
-    if (e.pointerType !== 'mouse' && !e.target.closest('.card-drag-handle')) return
+    if (e.pointerType !== 'mouse' && !e.target.closest(sel.handle)) return
 
     pending = { card, colId: String(colId), el: e.currentTarget, startX: e.clientX, startY: e.clientY }
     window.addEventListener('pointermove', onPointerMove, { passive: false })
@@ -88,9 +109,9 @@ export function useKanbanDrag({ canDrag, animated, onDrop }) {
     ghost.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`
     document.body.appendChild(ghost)
 
-    boardEl = el.closest('.kanban-board')
+    boardEl = el.closest(sel.board)
     currentColEl = el.closest('[data-col-id]')
-    const siblings = [...(currentColEl?.querySelectorAll('.kanban-card[data-card-id]') || [])]
+    const siblings = [...(currentColEl?.querySelectorAll(`${sel.card}[data-card-id]`) || [])]
 
     // Карточка мгновенно превращается в слот, призрак ровно поверх неё — визуально «подняли».
     state.instant = true
@@ -151,7 +172,7 @@ export function useKanbanDrag({ canDrag, animated, onDrop }) {
         moved ||= boardEl.scrollLeft !== before
       }
     }
-    const scroller = currentColEl?.querySelector('.col-cards')
+    const scroller = currentColEl?.querySelector(sel.scroller)
     if (scroller) {
       const r = scroller.getBoundingClientRect()
       if (curX >= r.left && curX <= r.right) {
@@ -171,11 +192,12 @@ export function useKanbanDrag({ canDrag, animated, onDrop }) {
     const colEl = document.elementFromPoint(curX, curY)?.closest('[data-col-id]')
     if (!colEl) return // вне колонок — слот остаётся на последнем месте, так приятнее
     currentColEl = colEl
-    const list = colEl.querySelector('.col-cards-list')
+    const list = colEl.querySelector(sel.list)
     if (!list) return
     const listTop = list.getBoundingClientRect().top
-    const cards = [...list.querySelectorAll(':scope > .kanban-card[data-card-id]')]
-      .filter(el => !el.classList.contains('k-card-leave-active'))
+    // уходящие (leave-active) карточки уже position:absolute — в расчёте индекса им не место
+    const cards = [...list.querySelectorAll(`:scope > ${sel.card}[data-card-id]`)]
+      .filter(el => ![...el.classList].some(c => c.endsWith('-leave-active')))
     let index = cards.length
     for (let i = 0; i < cards.length; i++) {
       const el = cards[i]
@@ -232,7 +254,7 @@ export function useKanbanDrag({ canDrag, animated, onDrop }) {
 
   async function settleGhost() {
     if (!ghost) return
-    const slot = document.querySelector(`[data-col-id="${CSS.escape(String(state.colId))}"] .card-placeholder`)
+    const slot = document.querySelector(`[data-col-id="${CSS.escape(String(state.colId))}"] ${sel.placeholder}`)
     if (!slot || !animated() || !ghost.animate) return
     const to = slot.getBoundingClientRect()
     const from = ghost.style.transform
@@ -256,16 +278,22 @@ export function useKanbanDrag({ canDrag, animated, onDrop }) {
 
   /** Список для рендера колонки: без перетаскиваемой карточки, со слотом на месте вставки. */
   function renderCards(col) {
-    if (!state.active) return col.visibleCards
-    const list = col.visibleCards.filter(c => c.id !== state.card?.id)
-    if (state.colId === String(col.id)) {
+    const items = getItems(col) || []
+    if (!state.active) return items
+    const list = items.filter(c => c.id !== state.card?.id)
+    if (state.colId === String(getColKey(col))) {
       list.splice(clamp(state.index, 0, list.length), 0, { id: '__placeholder__', placeholder: true })
     }
     return list
   }
 
   function isOver(col) {
-    return state.active && state.colId === String(col.id)
+    return state.active && state.colId === String(getColKey(col))
+  }
+
+  /** Колонка подсвечивается, только если карточку несут в неё из другой. */
+  function isOverForeign(col) {
+    return isOver(col) && String(getColKey(col)) !== state.fromColId
   }
 
   function destroy() {
@@ -276,5 +304,5 @@ export function useKanbanDrag({ canDrag, animated, onDrop }) {
     document.body.classList.remove('is-dragging')
   }
 
-  return { state, onPointerDown, renderCards, isOver, destroy }
+  return { state, onPointerDown, renderCards, isOver, isOverForeign, destroy }
 }
