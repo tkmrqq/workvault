@@ -2,7 +2,7 @@ const express = require('express')
 const fs = require('fs')
 const path = require('path')
 const db = require('../db')
-const { requireAdmin, verifyAccessToken, setAuthCookies, loginRateLimit, registerFailedLogin, clearFailedLogins } = require('../auth')
+const { requireAdmin, verifyAccessToken, setAuthCookies, clearAuthCookies, loginRateLimit, registerFailedLogin, clearFailedLogins } = require('../auth')
 const { renderAdminPage, renderAdminLoginPage } = require('./view')
 
 const config = require('../config')
@@ -35,6 +35,12 @@ module.exports = function createAdminRouter(io) {
     clearFailedLogins(req)
     setAuthCookies(res, user)
     res.redirect('/admin')
+  })
+
+  // Ссылка «Выйти» на странице админки вела в никуда (роута не было)
+  router.get('/logout', (req, res) => {
+    clearAuthCookies(res)
+    res.redirect('/admin/login')
   })
 
   // GET / — обычная навигация браузером, поэтому при отсутствии валидной
@@ -70,8 +76,9 @@ module.exports = function createAdminRouter(io) {
       FROM kanban_workspaces w ORDER BY w.sort
     `).all()
     const log = db.getAdminLog(30)
+    const folders = db.getFolders()
 
-    res.send(renderAdminPage({ stats, users, channels, workspaces, log, me: payload }))
+    res.send(renderAdminPage({ stats, users, channels, folders, workspaces, log, me: payload }))
   })
 
   router.post('/api/clear-history/:channelId', requireAdmin, (req, res) => {
@@ -163,6 +170,111 @@ module.exports = function createAdminRouter(io) {
       res.status(500).json({ error: 'Внутренняя ошибка сервера' })
     }
   })
+
+  // ── Каналы и папки ──
+  // Раньше редактировались из настроек приложения одним большим /api/folders/update:
+  // не-админ получал 403, а фронт записывал {error} вместо списка папок — переименование
+  // «не работало», а другие клиенты изменений вообще не видели. Теперь — точечные операции.
+  const cleanName = (v, fallback) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, 64) || fallback
+  const cleanIcon = (v, fallback) => [...String(v ?? '').trim()].slice(0, 4).join('') || fallback
+  const folderById = (id) => db.db.prepare('SELECT * FROM folders WHERE id = ?').get(Number(id))
+  const channelById = (id) => db.db.prepare('SELECT * FROM channels WHERE id = ?').get(Number(id))
+  const broadcastFolders = () => io.emit('folders:update')
+  const nextSort = (table, where = '', ...args) =>
+    (db.db.prepare(`SELECT COALESCE(MAX(sort), -1) + 1 AS s FROM ${table} ${where}`).get(...args)).s
+  const handle = (action, fn) => (req, res) => {
+    try {
+      const result = fn(req, res)
+      if (res.headersSent) return
+      db.logAdmin(action, { ...req.params, ...(req.body || {}), by: req.user.id })
+      broadcastFolders()
+      res.json({ ok: true, ...(result || {}), folders: db.getFolders() })
+    } catch (e) {
+      console.error(`${action} error:`, e)
+      if (!res.headersSent) res.status(500).json({ error: 'Внутренняя ошибка сервера' })
+    }
+  }
+
+  router.post('/api/folders', requireAdmin, handle('create-folder', (req) => {
+    const id = db.db.prepare('INSERT INTO folders (name, icon, sort) VALUES (?,?,?)')
+      .run(cleanName(req.body?.name, 'Новая папка'), cleanIcon(req.body?.icon, '📁'), nextSort('folders')).lastInsertRowid
+    return { id: Number(id) }
+  }))
+
+  router.post('/api/folders/:id', requireAdmin, handle('update-folder', (req, res) => {
+    const f = folderById(req.params.id)
+    if (!f) return res.status(404).json({ error: 'Папка не найдена' })
+    db.db.prepare('UPDATE folders SET name = ?, icon = ? WHERE id = ?')
+      .run(cleanName(req.body?.name, f.name), cleanIcon(req.body?.icon, f.icon), f.id)
+  }))
+
+  router.post('/api/folders/:id/delete', requireAdmin, handle('delete-folder', (req, res) => {
+    const f = folderById(req.params.id)
+    if (!f) return res.status(404).json({ error: 'Папка не найдена' })
+    const { c } = db.db.prepare('SELECT COUNT(*) AS c FROM channels WHERE folder_id = ?').get(f.id)
+    if (c > 0) return res.status(400).json({ error: 'В папке есть каналы — сначала перенесите или удалите их' })
+    db.db.prepare('DELETE FROM folders WHERE id = ?').run(f.id)
+  }))
+
+  router.post('/api/channels', requireAdmin, handle('create-channel', (req, res) => {
+    const f = folderById(req.body?.folderId)
+    if (!f) return res.status(400).json({ error: 'Укажите существующую папку' })
+    const id = db.db.prepare('INSERT INTO channels (folder_id, name, icon, sort) VALUES (?,?,?,?)')
+      .run(f.id, cleanName(req.body?.name, 'канал'), cleanIcon(req.body?.icon, '#'), nextSort('channels', 'WHERE folder_id = ?', f.id)).lastInsertRowid
+    return { id: Number(id) }
+  }))
+
+  router.post('/api/channels/:id', requireAdmin, handle('update-channel', (req, res) => {
+    const ch = channelById(req.params.id)
+    if (!ch) return res.status(404).json({ error: 'Канал не найден' })
+    let folderId = ch.folder_id
+    let sort = ch.sort
+    if (req.body?.folderId != null && Number(req.body.folderId) !== ch.folder_id) {
+      const f = folderById(req.body.folderId)
+      if (!f) return res.status(400).json({ error: 'Папка не найдена' })
+      folderId = f.id
+      sort = nextSort('channels', 'WHERE folder_id = ?', f.id)
+    }
+    db.db.prepare('UPDATE channels SET name = ?, icon = ?, folder_id = ?, sort = ? WHERE id = ?')
+      .run(cleanName(req.body?.name, ch.name), cleanIcon(req.body?.icon, ch.icon), folderId, sort, ch.id)
+  }))
+
+  // Перестановка вверх/вниз внутри своего списка (для папок и каналов)
+  function move(table, row, dir, scopeSql = '', ...scopeArgs) {
+    const list = db.db.prepare(`SELECT id FROM ${table} ${scopeSql} ORDER BY sort, id`).all(...scopeArgs).map(r => r.id)
+    const i = list.indexOf(row.id)
+    const j = dir === 'up' ? i - 1 : i + 1
+    if (i < 0 || j < 0 || j >= list.length) return
+    ;[list[i], list[j]] = [list[j], list[i]]
+    const upd = db.db.prepare(`UPDATE ${table} SET sort = ? WHERE id = ?`)
+    db.db.transaction(() => list.forEach((id, idx) => upd.run(idx, id)))()
+  }
+
+  router.post('/api/folders/:id/move', requireAdmin, handle('move-folder', (req, res) => {
+    const f = folderById(req.params.id)
+    if (!f) return res.status(404).json({ error: 'Папка не найдена' })
+    move('folders', f, req.body?.dir)
+  }))
+
+  router.post('/api/channels/:id/move', requireAdmin, handle('move-channel', (req, res) => {
+    const ch = channelById(req.params.id)
+    if (!ch) return res.status(404).json({ error: 'Канал не найден' })
+    move('channels', ch, req.body?.dir, 'WHERE folder_id = ?', ch.folder_id)
+  }))
+
+  router.post('/api/channels/:id/delete', requireAdmin, handle('delete-channel', (req, res) => {
+    const ch = channelById(req.params.id)
+    if (!ch) return res.status(404).json({ error: 'Канал не найден' })
+    const { c } = db.db.prepare('SELECT COUNT(*) AS c FROM channels').get()
+    if (c <= 1) return res.status(400).json({ error: 'Нельзя удалить последний канал' })
+    db.db.transaction(() => {
+      const msgs = 'SELECT id FROM messages WHERE channel_id = ?'
+      db.db.prepare(`DELETE FROM reactions WHERE message_id IN (${msgs})`).run(ch.id)
+      db.db.prepare(`DELETE FROM poll_votes WHERE message_id IN (${msgs})`).run(ch.id)
+      db.db.prepare('DELETE FROM messages WHERE channel_id = ?').run(ch.id)
+      db.db.prepare('DELETE FROM channels WHERE id = ?').run(ch.id)
+    })()
+  }))
 
   return router
 }

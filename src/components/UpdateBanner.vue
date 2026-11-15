@@ -39,7 +39,7 @@ function install() {
 .ub-row { display: inline-flex; align-items: center; gap: 6px; }
 .update-btn {
   padding: var(--space-1) var(--space-3); border-radius: var(--radius-md);
-  background: var(--accent); color: white;
+  background: var(--accent); color: var(--on-accent, #fff);
   font-size: var(--text-xs); font-weight: 700;
   transition: background var(--transition);
 }

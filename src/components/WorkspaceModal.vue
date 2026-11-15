@@ -133,7 +133,7 @@ async function save() {
   display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; padding: 10px 12px;
   border: 1px solid var(--border); border-radius: 10px; cursor: pointer;
 }
-.ws-private input { margin-top: 3px; accent-color: var(--accent, #7c6af7); }
+.ws-private input { margin-top: 3px; accent-color: var(--accent, var(--accent)); }
 .ws-private span { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
 .ws-private small { color: var(--text-muted, #8a8f98); font-size: 11.5px; line-height: 1.35; }
 .ws-private-note { margin-top: 14px; font-size: 12px; color: var(--text-muted, #8a8f98); }
@@ -172,7 +172,7 @@ async function save() {
 .btn-save {
   padding: 8px 18px; border-radius: var(--radius-md);
   font-size: var(--text-sm); font-weight: 600;
-  background: var(--accent); color: #fff;
+  background: var(--accent); color: var(--on-accent, #fff);
   transition: background var(--transition);
 }
 .btn-save:hover:not(:disabled) { background: var(--accent-hover); }

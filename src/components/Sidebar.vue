@@ -74,7 +74,42 @@
           </button>
         </div>
       </div>
-      <div v-if="search.trim() && !filteredFolders.length" class="nav-empty">
+      <!-- ─── ЛИЧНЫЕ СООБЩЕНИЯ ─── -->
+      <div v-if="!searching || filteredDms.length" class="folder dm-section">
+        <div class="dm-head">
+          <button class="folder-header" :aria-expanded="isOpen(DM_KEY)" @click="toggleFolder(DM_KEY)">
+            <ChevronRight class="folder-arrow" :class="{ open: isOpen(DM_KEY) }" :size="13" :stroke-width="2.5" />
+            <span class="folder-icon">✉️</span>
+            <span class="folder-name">Личные сообщения</span>
+            <span v-if="!isOpen(DM_KEY) && store.dmUnreadTotal" class="badge badge-folder">{{ store.dmUnreadTotal > 99 ? '99+' : store.dmUnreadTotal }}</span>
+          </button>
+          <button class="dm-add" title="Новое личное сообщение" @click="showDmPicker = true"><Plus :size="14" :stroke-width="2.2" /></button>
+        </div>
+        <div v-show="isOpen(DM_KEY)" class="folder-channels">
+          <button
+            v-for="d in filteredDms" :key="d.id"
+            class="channel-item dm-item"
+            :class="{ active: store.activeChId === d.id, unread: !!d.unread && store.activeChId !== d.id }"
+            :title="store.dmTitle(d)"
+            @click="go(d.id)"
+          >
+            <span class="dm-avatar" :style="{ background: (peerOf(d).color || '#7c6af7') + '22', color: peerOf(d).color || '#7c6af7' }">
+              <template v-if="d.is_self">⭐</template>
+              <AvatarContent v-else :value="peerOf(d).avatar" :name="peerOf(d).name" />
+            </span>
+            <span v-if="!d.is_self && isUserOnline(d.peer?.id)" class="dm-online" title="В сети" />
+            <span class="ch-name">
+              <template v-for="(part, i) in nameParts(store.dmTitle(d))" :key="i">
+                <mark v-if="part.hit" class="ch-hit">{{ part.text }}</mark><template v-else>{{ part.text }}</template>
+              </template>
+            </span>
+            <span v-if="d.unread && store.activeChId !== d.id" class="badge">{{ d.unread > 99 ? '99+' : d.unread }}</span>
+          </button>
+          <button v-if="!filteredDms.length" class="dm-empty" @click="showDmPicker = true">Написать коллеге…</button>
+        </div>
+      </div>
+
+      <div v-if="search.trim() && !filteredFolders.length && !filteredDms.length" class="nav-empty">
         Ничего не найдено по «{{ search.trim() }}»
       </div>
       <div v-else-if="allChannelsFlat.length > 1" class="nav-hint">Alt + ↑/↓ — следующий канал</div>
@@ -92,17 +127,8 @@
       </button>
     </div>
 
-    <div class="online-section">
-      <div class="online-label">Онлайн — {{ store.onlineList.length }}</div>
-      <div class="online-list">
-        <div v-for="u in store.onlineList" :key="u.userId" class="online-user">
-          <span class="online-dot-sm" />
-          <span class="ou-name">{{ u.userName }}</span>
-        </div>
-      </div>
-    </div>
-
     <EditSidebar v-if="showEdit" @close="showEdit = false" />
+    <DmPicker v-if="showDmPicker" @close="showDmPicker = false; mobile.close()" />
       <ProfileModal
         v-if="showProfile && store.user"
         :user="store.user"
@@ -118,8 +144,9 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import EditSidebar from './EditSidebar.vue'
+import DmPicker from './DmPicker.vue'
 import ProfileModal from './ProfileModal.vue'
-import { Settings, Sun, Moon, Search, ChevronRight, LayoutDashboard, X, Command } from 'lucide-vue-next'
+import { Settings, Sun, Moon, Search, ChevronRight, LayoutDashboard, X, Command, Plus } from 'lucide-vue-next'
 import { useMobileSidebar } from '@/composables/useMobileSidebar'
 import { useCommandPalette } from '@/composables/useCommandPalette'
 // TitleBar импорт убран
@@ -134,6 +161,8 @@ const search  = ref('')
 const collapsed = ref((() => { try { return JSON.parse(localStorage.getItem('wv-collapsed-folders') || '{}') } catch { return {} } })())
 watch(collapsed, v => localStorage.setItem('wv-collapsed-folders', JSON.stringify(v)), { deep: true })
 const showEdit  = ref(false)
+const showDmPicker = ref(false)
+const DM_KEY = 'dm'
 const unread    = computed(() => store.unread || {})
 const searching = computed(() => !!search.value.trim())
 
@@ -144,6 +173,18 @@ const filteredFolders = computed(() => {
     .map(f => ({ ...f, channels: (f.channels || []).filter(c => c.name.toLowerCase().includes(q)) }))
     .filter(f => f.channels.length)
 })
+
+// Диалоги: поиск по имени собеседника, свежие сверху
+const filteredDms = computed(() => {
+  const list = [...(store.dms || [])].sort((a, b) => (b.last_at || 0) - (a.last_at || 0) || b.id - a.id)
+  const q = search.value.trim().toLowerCase()
+  return q ? list.filter(d => store.dmTitle(d).toLowerCase().includes(q)) : list
+})
+function peerOf(d) {
+  if (d.is_self) return store.user || {}
+  return { ...(d.peer || {}), ...(store.usersById?.[d.peer?.id] || {}) }
+}
+function isUserOnline(id) { return !!id && store.onlineList.some(u => u.userId === id) }
 
 function toggleFolder(id) { collapsed.value[id] = !collapsed.value[id] }
 // Во время поиска показываем совпадения даже в свёрнутых папках
@@ -165,13 +206,16 @@ function nameParts(name) {
 }
 const allChannelsFlat = computed(() => filteredFolders.value.flatMap(f => f.channels || []))
 function openFirstMatch() {
-  const first = allChannelsFlat.value[0]
+  const first = allChannelsFlat.value[0] || filteredDms.value[0]
   if (first) { go(first.id); search.value = '' }
 }
 // Alt+↑/↓ — переключение между каналами (по видимому списку)
 function onKeydown(e) {
   if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return
-  const list = store.folders.flatMap(f => isOpen(f.id) ? (f.channels || []) : [])
+  const list = [
+    ...store.folders.flatMap(f => isOpen(f.id) ? (f.channels || []) : []),
+    ...(isOpen(DM_KEY) ? filteredDms.value : [])
+  ]
   if (!list.length) return
   e.preventDefault()
   const idx = list.findIndex(c => c.id === store.activeChId)
@@ -195,9 +239,34 @@ function onlineInChannel(channelId) {
 </script>
 
 <style scoped>
+.dm-head { display: flex; align-items: center; }
+.dm-head .folder-header { flex: 1; min-width: 0; }
+.dm-add {
+  width: 24px; height: 24px; flex-shrink: 0; margin-right: var(--space-2);
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-md); color: var(--text-faint);
+  transition: background var(--transition), color var(--transition);
+}
+.dm-add:hover { background: var(--hover); color: var(--accent); }
+.dm-item { position: relative; }
+.dm-avatar {
+  width: 20px; height: 20px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-full); overflow: hidden; font-size: .7rem; font-weight: 700;
+}
+.dm-online {
+  position: absolute; left: 24px; top: 50%; margin-top: 3px;
+  width: 8px; height: 8px; border-radius: var(--radius-full);
+  background: var(--green); border: 2px solid var(--surface);
+}
+.dm-empty {
+  display: block; width: 100%; text-align: left;
+  padding: 6px 12px 6px 30px; font-size: var(--text-xs); color: var(--text-faint);
+}
+.dm-empty:hover { color: var(--accent); }
 .user-badge { cursor: pointer; transition: background var(--transition); border-radius: var(--radius-md); }
 
-.user-badge:hover { background: var(--hover); }
+.user-badge:hover { background: var(--hover); border-top-left-radius: 0; border-top-right-radius: 0;}
 
 .sidebar {
   display: flex; flex-direction: column;
@@ -313,7 +382,7 @@ function onlineInChannel(channelId) {
 .ch-hit { background: var(--accent-soft); color: var(--accent); border-radius: 3px; padding: 0 1px; }
 .badge {
   font-size: 10px; font-weight: 700; min-width: 18px; height: 16px;
-  background: var(--accent); color: white;
+  background: var(--accent); color: var(--on-accent, #fff);
   border-radius: var(--radius-full);
   display: flex; align-items: center; justify-content: center; padding: 0 4px;
 }
@@ -329,19 +398,6 @@ function onlineInChannel(channelId) {
   opacity: .7;
 }
 @media (max-width: 860px), (hover: none) { .nav-hint { display: none; } }
-
-.online-section {
-  border-top: 1px solid var(--divider);
-  padding: var(--space-2) var(--space-4) var(--space-3);
-}
-.online-label {
-  font-size: 10px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: .05em; color: var(--text-faint); margin-bottom: var(--space-2);
-}
-.online-list { display: flex; flex-direction: column; gap: 2px; }
-.online-user { display: flex; align-items: center; gap: var(--space-2); }
-.online-dot-sm { width: 6px; height: 6px; border-radius: var(--radius-full); background: var(--green); flex-shrink: 0; }
-.ou-name { font-size: var(--text-xs); color: var(--text-muted); }
 
 .kanban-nav {
   padding: var(--space-2) var(--space-2) 0;

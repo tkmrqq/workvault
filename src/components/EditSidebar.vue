@@ -6,12 +6,41 @@
         <button class="ep-close" @click="$emit('close')"><X :size="14" :stroke-width="2" /></button>
       </div>
 
-      <div class="ep-tabs" role="tablist" aria-label="Разделы настроек">
-        <button role="tab" :aria-selected="activeTab === 'general'" :class="{ active: activeTab === 'general' }" @click="activeTab = 'general'">Общие</button>
-        <button role="tab" :aria-selected="activeTab === 'channels'" :class="{ active: activeTab === 'channels' }" @click="activeTab = 'channels'">Каналы</button>
-      </div>
+      <div class="ep-body settings-body">
+        <section class="settings-section">
+          <div class="settings-section-title">Оформление</div>
+          <div class="setting-row static">
+            <span class="setting-icon"><Moon v-if="store.theme === 'dark'" :size="16" /><Sun v-else :size="16" /></span>
+            <span class="setting-copy"><strong>Тема</strong><small>Светлая или тёмная</small></span>
+            <div class="seg" role="radiogroup" aria-label="Тема">
+              <button role="radio" :aria-checked="store.theme === 'dark'" :class="{ active: store.theme === 'dark' }" @click="setTheme('dark')">Тёмная</button>
+              <button role="radio" :aria-checked="store.theme === 'light'" :class="{ active: store.theme === 'light' }" @click="setTheme('light')">Светлая</button>
+            </div>
+          </div>
+          <div class="setting-row static scheme-row">
+            <span class="setting-icon"><Palette :size="16" /></span>
+            <span class="setting-copy"><strong>Цветовая схема</strong><small>{{ currentSchemeName }}</small></span>
+          </div>
+          <div class="scheme-grid" role="radiogroup" aria-label="Цветовая схема">
+            <button
+              v-for="s in COLOR_SCHEMES" :key="s.id"
+              class="scheme-chip" role="radio"
+              :aria-checked="uiPreferences.colorScheme === s.id"
+              :class="{ active: uiPreferences.colorScheme === s.id }"
+              :data-scheme="s.id" :data-theme="store.theme"
+              :title="s.name"
+              @click="setUiPreference('colorScheme', s.id)"
+            >
+              <span class="scheme-preview">
+                <span class="sp-bg"></span>
+                <span class="sp-accent"></span>
+                <Check v-if="uiPreferences.colorScheme === s.id" class="sp-check" :size="12" :stroke-width="3" />
+              </span>
+              <span class="scheme-name">{{ s.name }}</span>
+            </button>
+          </div>
+        </section>
 
-      <div v-if="activeTab === 'general'" class="ep-body settings-body">
         <section class="settings-section">
           <div class="settings-section-title">Интерфейс</div>
           <label class="setting-row">
@@ -43,33 +72,19 @@
             <span class="setting-switch"></span>
           </label>
         </section>
+
+        <!-- Каналы теперь редактируются только в /admin (сервер всё равно пускал только админов) -->
+        <section v-if="isAdmin" class="settings-section">
+          <div class="settings-section-title">Администрирование</div>
+          <a class="setting-row link" :href="adminUrl" target="_blank" rel="noopener">
+            <span class="setting-icon"><Hash :size="16" /></span>
+            <span class="setting-copy"><strong>Каналы и папки</strong><small>Переименование, порядок, удаление — в админке</small></span>
+            <ExternalLink :size="14" class="link-ico" />
+          </a>
+        </section>
       </div>
 
-      <div v-else class="ep-body">
-        <div v-for="(folder, fi) in draft" :key="fi" class="ef-folder">
-          <div class="ef-folder-row">
-            <input v-model="folder.icon" class="ef-mini" maxlength="4" placeholder="📁" />
-            <input v-model="folder.name" class="ef-input" placeholder="Название папки" />
-            <button class="ef-del" title="Удалить папку" @click="deleteFolder(fi)"><Trash2 :size="13" :stroke-width="2" /></button>
-          </div>
-          <div v-for="(ch, ci) in folder.channels" :key="ci" class="ef-ch-row">
-            <input v-model="ch.icon" class="ef-mini" maxlength="4" placeholder="#" />
-            <input v-model="ch.name" class="ef-input" placeholder="Канал" />
-            <button class="ef-del" @click="deleteChannel(fi, ci)"><X :size="13" :stroke-width="2" /></button>
-          </div>
-          <button class="ef-add-ch" @click="addChannel(fi)"><Plus :size="12" :stroke-width="2.5" /> канал</button>
-        </div>
-
-        <button class="ef-add-folder" @click="addFolder"><Plus :size="13" :stroke-width="2.5" /> папка</button>
-      </div>
-
-      <div v-if="activeTab === 'channels'" class="ep-footer">
-        <button class="ep-btn" @click="$emit('close')">Отмена</button>
-        <button class="ep-btn accent" :disabled="saving" @click="save">
-          {{ saving ? 'Сохраняем...' : 'Сохранить' }}
-        </button>
-      </div>
-      <div v-else class="ep-footer">
+      <div class="ep-footer">
         <button class="ep-btn accent" @click="$emit('close')">Готово</button>
       </div>
     </div>
@@ -77,43 +92,21 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed } from 'vue'
 import { useAppStore } from '@/stores/app'
-import { Settings, X, Trash2, Plus, Sparkles, Volume2, VolumeX, Maximize2, Minimize2 } from 'lucide-vue-next'
-import { setUiPreference, uiPreferences } from '@/composables/useUiPreferences'
+import { Settings, X, Sparkles, Volume2, VolumeX, Maximize2, Minimize2, Moon, Sun, Palette, Check, Hash, ExternalLink } from 'lucide-vue-next'
+import { setUiPreference, uiPreferences, COLOR_SCHEMES } from '@/composables/useUiPreferences'
+import { getApiBase } from '@/lib/apiBase'
 
-const emit  = defineEmits(['close'])
+defineEmits(['close'])
 const store = useAppStore()
-const saving = ref(false)
-const activeTab = ref('general')
 
-// Deep clone для редактирования
-const draft = ref(JSON.parse(JSON.stringify(store.folders)))
+const isAdmin = computed(() => store.user?.role === 'admin')
+const adminUrl = computed(() => `${getApiBase() || window.location.origin}/admin`)
+const currentSchemeName = computed(() => COLOR_SCHEMES.find(s => s.id === uiPreferences.colorScheme)?.name || '')
 
-function addFolder() {
-  draft.value.push({ icon: '📁', name: 'Новая папка', channels: [] })
-}
-function deleteFolder(fi) { draft.value.splice(fi, 1) }
-function addChannel(fi) {
-  draft.value[fi].channels.push({ icon: '#', name: 'новый-канал' })
-}
-function deleteChannel(fi, ci) { draft.value[fi].channels.splice(ci, 1) }
-
-async function save() {
-  saving.value = true
-  try {
-    const res = await fetch('/api/folders/update', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(draft.value)
-    })
-    store.folders = await res.json()
-    emit('close')
-  } catch (e) {
-    alert('Ошибка сохранения: ' + e.message)
-  } finally {
-    saving.value = false
-  }
+function setTheme(t) {
+  if (store.theme !== t) store.toggleTheme()
 }
 </script>
 
@@ -187,51 +180,8 @@ async function save() {
 .setting-row input:checked + .setting-switch::after { transform: translateX(14px); background: var(--accent); }
 .setting-row input:focus-visible + .setting-switch { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.ef-folder {
-  background: var(--surface-3); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); padding: var(--space-3);
-  display: flex; flex-direction: column; gap: var(--space-2);
-}
-.ef-folder-row, .ef-ch-row {
-  display: flex; align-items: center; gap: var(--space-2);
-}
-.ef-ch-row { padding-left: var(--space-3); }
-.ef-mini {
-  width: 38px; text-align: center;
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius-md); padding: var(--space-1);
-  font-size: var(--text-xs); color: var(--text);
-}
-.ef-input {
-  flex: 1;
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius-md); padding: var(--space-1) var(--space-2);
-  font-size: var(--text-xs); color: var(--text);
-}
-.ef-input:focus, .ef-mini:focus { outline: none; border-color: var(--accent-line); }
-.ef-del {
-  font-size: .75rem; color: var(--text-faint); width: 24px; height: 24px;
-  display: flex; align-items: center; justify-content: center;
-  border-radius: var(--radius-md); transition: all var(--transition);
-}
-.ef-del:hover { background: rgba(224,108,117,.15); color: var(--red, #e06c75); }
 
-.ef-add-ch {
-  align-self: flex-start; font-size: 11px; color: var(--accent);
-  padding: 2px var(--space-2); border-radius: var(--radius-md);
-  display: flex; align-items: center; gap: 4px;
-  transition: background var(--transition);
-}
-.ef-add-ch:hover { background: var(--accent-soft); }
 
-.ef-add-folder {
-  align-self: flex-start; font-size: var(--text-xs); font-weight: 600;
-  color: var(--accent); padding: var(--space-2) var(--space-3);
-  border: 1px dashed var(--accent-line); border-radius: var(--radius-md);
-  display: flex; align-items: center; gap: 6px;
-  transition: all var(--transition);
-}
-.ef-add-folder:hover { background: var(--accent-soft); }
 
 .ep-footer {
   display: flex; gap: var(--space-3); justify-content: flex-end;
@@ -245,7 +195,43 @@ async function save() {
   transition: all var(--transition);
 }
 .ep-btn:hover { background: var(--hover); color: var(--text); }
-.ep-btn.accent { background: var(--accent); color: white; border-color: var(--accent); }
+.ep-btn.accent { background: var(--accent); color: var(--on-accent, #fff); border-color: var(--accent); }
 .ep-btn.accent:hover { background: var(--accent-hover); }
 .ep-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ── Оформление ── */
+.setting-row.static { cursor: default; }
+.setting-row.link { text-decoration: none; color: inherit; cursor: pointer; }
+.setting-row.link:hover .link-ico { color: var(--accent); }
+.link-ico { color: var(--text-faint); transition: color var(--transition); }
+.seg { display: inline-flex; padding: 2px; border-radius: var(--radius-md); background: var(--surface-3); border: 1px solid var(--border); }
+.seg button {
+  border: none; background: none; color: var(--text-muted); cursor: pointer;
+  font: inherit; font-size: var(--text-xs); font-weight: 600;
+  padding: 4px 10px; border-radius: calc(var(--radius-md) - 2px);
+  transition: background var(--transition), color var(--transition);
+}
+.seg button.active { background: var(--accent-soft); color: var(--accent); }
+.scheme-row { margin-bottom: -2px; }
+.scheme-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 0 2px 2px; }
+.scheme-chip {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  padding: 7px 4px 6px; border-radius: var(--radius-md);
+  border: 1px solid var(--border); background: var(--surface-2); cursor: pointer;
+  font: inherit; color: var(--text-muted);
+  transition: border-color var(--transition), background var(--transition), transform var(--transition);
+}
+.scheme-chip:hover { border-color: var(--accent-line); transform: translateY(-1px); }
+.scheme-chip.active { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.scheme-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Внутри чипа свои data-theme/data-scheme — превью рисуется цветами самой схемы */
+.scheme-preview {
+  position: relative; width: 100%; height: 26px; border-radius: var(--radius-sm);
+  overflow: hidden; display: block; border: 1px solid var(--divider);
+}
+.sp-bg { position: absolute; inset: 0; background: linear-gradient(135deg, var(--surface) 0 55%, var(--surface-3) 55%); }
+.sp-accent { position: absolute; left: 6px; bottom: 6px; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.sp-check { position: absolute; right: 5px; top: 6px; color: var(--accent); }
+.scheme-name { font-size: 10px; font-weight: 600; color: var(--text-muted); }
+.scheme-chip.active .scheme-name { color: var(--text); }
 </style>

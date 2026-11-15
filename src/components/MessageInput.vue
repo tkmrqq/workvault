@@ -546,7 +546,7 @@ async function runCommandAfterSend(cmd, ack, msgText) {
   display: flex; align-items: center; justify-content: center;
   color: var(--text-muted, #8a8f98); background: transparent; border: none; cursor: pointer;
 }
-.sticker-toggle:hover, .sticker-toggle.on { color: var(--accent, #7c6af7); background: var(--surface-2, rgba(255,255,255,.05)); }
+.sticker-toggle:hover, .sticker-toggle.on { color: var(--accent, var(--accent)); background: var(--surface-2, rgba(255,255,255,.05)); }
 .sticker-toggle:disabled { opacity: .4; cursor: default; }
 .sticker-panel {
   position: absolute; right: 12px; bottom: calc(100% - 4px); z-index: 30;
@@ -558,7 +558,7 @@ async function runCommandAfterSend(cmd, ack, msgText) {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 10px; font-size: 12px; font-weight: 600; border-bottom: 1px solid var(--border, #2a2a30);
 }
-.sticker-add { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--accent, #7c6af7); font-weight: 500; }
+.sticker-add { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--accent, var(--accent)); font-weight: 500; }
 .sticker-add input { display: none; }
 .sticker-empty { padding: 24px 12px; text-align: center; font-size: 12px; color: var(--text-muted, #8a8f98); }
 .sticker-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 8px; overflow-y: auto; }
@@ -643,7 +643,7 @@ async function runCommandAfterSend(cmd, ack, msgText) {
 
 .send-btn {
   width: 34px; height: 34px; flex-shrink: 0;
-  background: var(--accent); color: white; border-radius: var(--radius-lg);
+  background: var(--accent); color: var(--on-accent, #fff); border-radius: var(--radius-lg);
   display: flex; align-items: center; justify-content: center;
   transition: all var(--transition);
 }
@@ -708,7 +708,7 @@ async function runCommandAfterSend(cmd, ack, msgText) {
   color: var(--accent); font-size: inherit; font-weight: 500;
   transition: background .15s ease, color .15s ease;
 }
-.cmd-toggle.on { background: var(--accent); color: #fff; }
+.cmd-toggle.on { background: var(--accent); color: var(--on-accent, #fff); }
 
 .slash-pop-enter-active { transition: opacity var(--dur-fast, .15s) var(--ease-out, ease), transform var(--dur, .25s) var(--ease-spring, ease); }
 .slash-pop-leave-active { transition: opacity var(--dur-fast, .15s) ease, transform var(--dur-fast, .15s) ease; }

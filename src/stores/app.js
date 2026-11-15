@@ -46,6 +46,12 @@ export const useAppStore = defineStore('app', () => {
   // Переход «к исходному сообщению» из карточки: MessageList ждёт, пока канал
   // загрузится, скроллит к сообщению и подсвечивает его (flashMsgId)
   const focusTarget = ref(null) // { channelId, messageId, replyId? }
+  // Личные сообщения: список диалогов текущего юзера (каналы kind='dm',
+  // в папках их нет). unread у DM считается на сервере и лежит в самом объекте.
+  const dms         = ref([])
+  // Закреплённые сообщения активного канала/диалога (новые сверху)
+  const activePins  = ref([])
+  let pinsReq       = 0
 
   // ── Пользователи и @упоминания ──
   const users = ref([])
@@ -117,7 +123,21 @@ export const useAppStore = defineStore('app', () => {
 
   // ── Computed ───────────────────────────────────────────
   const allChannels    = computed(() => folders.value.flatMap(f => f.channels || []))
-  const activeChannel  = computed(() => allChannels.value.find(c => c.id === activeChId.value))
+  const activeDm       = computed(() => dms.value.find(d => d.id === activeChId.value) || null)
+  function dmTitle(d) {
+    if (!d) return ''
+    return d.is_self ? 'Избранное' : (usersById.value[d.peer?.id]?.name || d.peer?.name || 'Личные сообщения')
+  }
+  // Для DM собираем «псевдо-канал», чтобы шапка/пустое состояние работали как с обычным каналом
+  const activeChannel  = computed(() => {
+    const ch = allChannels.value.find(c => c.id === activeChId.value)
+    if (ch) return ch
+    const d = activeDm.value
+    if (!d) return undefined
+    return { id: d.id, kind: 'dm', name: dmTitle(d), icon: d.is_self ? '⭐' : '✉️', peer: d.peer, is_self: d.is_self }
+  })
+  const isActiveDm     = computed(() => !!activeDm.value)
+  const dmUnreadTotal  = computed(() => dms.value.reduce((n, d) => n + (d.id !== activeChId.value ? (d.unread || 0) : 0), 0))
   const activeMessages = computed(() => messages.value[activeChId.value] || [])
   const activeAttachmentFilter = computed(() => attachmentFilters.value[activeChId.value] || 'all')
   const filteredActiveMessages = computed(() => {
@@ -224,6 +244,7 @@ export const useAppStore = defineStore('app', () => {
 
   function _afterLogin() {
     initSocket()
+    loadDms()
     // Access-токен живёт 15 мин — обновляем каждые 10, чтобы сессия не
     // рвалась посреди работы; 401-retry в authFetch — подстраховка
     // на случай, если запрос всё же попал в узкое окно между обновлениями
@@ -238,6 +259,8 @@ export const useAppStore = defineStore('app', () => {
       await fetch(`${API}/api/auth/logout`, { method: 'POST', credentials: 'include' })
     } catch {}
     user.value = null
+    dms.value = []
+    activePins.value = []
     clearInterval(refreshTimer)
     socket?.disconnect()
     socket = null
@@ -257,7 +280,9 @@ export const useAppStore = defineStore('app', () => {
     socket.on('connect', () => {
       if (activeChId.value) {
         socket.emit('channel:join', { channelId: activeChId.value })
+        loadPins(activeChId.value)
       }
+      loadDms()
     })
 
     socket.on('connect_error', (err) => {
@@ -268,6 +293,12 @@ export const useAppStore = defineStore('app', () => {
     })
 
     socket.on('online:update', list => { onlineList.value = list })
+    // Админ поменял каналы/папки в /admin — подтягиваем свежий список у всех
+    socket.on('folders:update', async () => {
+      await fetchFolders()
+      const all = Array.isArray(folders.value) ? folders.value.flatMap(f => f.channels || []) : []
+      if (activeChId.value && all.length && !all.some(c => c.id === activeChId.value) && !dms.value.some(d => d.id === activeChId.value)) setChannel(all[0].id)
+    })
     socket.on('stickers:update', () => { if (stickersLoaded) loadStickers(true) })
 
     socket.on('message:new', msg => { _pushMessage(msg) })
@@ -298,6 +329,55 @@ export const useAppStore = defineStore('app', () => {
     socket.on('channel:activity', ({ channelId, userId } = {}) => {
       if (!channelId || userId === user.value?.id || channelId === activeChId.value) return
       unread.value = { ...unread.value, [channelId]: (unread.value[channelId] || 0) + 1 }
+    })
+
+    // Новое сообщение в личке — приходит в личную комнату user:<id>, даже если диалог не открыт
+    socket.on('dm:activity', ({ channelId, userId, message } = {}) => {
+      if (!channelId) return
+      const mine     = userId === user.value?.id
+      const isActive = channelId === activeChId.value
+      const idx = dms.value.findIndex(d => d.id === channelId)
+      if (idx === -1) {
+        loadDms() // новый диалог (кто-то написал впервые) — тянем список целиком
+      } else {
+        const d = dms.value[idx]
+        const next = {
+          ...d,
+          opened: true,
+          last_message: message || d.last_message,
+          last_at: message?.created_at || d.last_at,
+          unread: (mine || isActive) ? 0 : (d.unread || 0) + 1,
+        }
+        dms.value = [next, ...dms.value.filter((_, i) => i !== idx)]
+      }
+      if (mine) return
+      if (isActive) {
+        socket?.emit('channel:read', { channelId })
+        if (!document.hidden) return
+      }
+      const body = message?.text || (message?.type && message.type !== 'text' ? '📎 вложение' : '')
+      _notify(`✉️ ${message?.user_name || 'Личное сообщение'}`, body)
+    })
+
+    // Закрепили/открепили сообщение в канале или диалоге
+    socket.on('message:pin', ({ messageId, channelId, pinned, pinned_at, pinned_by, pinned_by_name, message } = {}) => {
+      if (!messageId) return
+      _patchMessage(messageId, m => ({
+        ...m,
+        pinned_at:      pinned ? (pinned_at || m.pinned_at || Math.floor(Date.now() / 1000)) : null,
+        pinned_by:      pinned ? (pinned_by ?? null) : null,
+        pinned_by_name: pinned ? (pinned_by_name ?? null) : null,
+      }))
+      if (channelId !== activeChId.value) return
+      if (pinned) {
+        const base = message || (messages.value[channelId] || []).find(m => m.id === messageId)
+        if (!base) { loadPins(channelId); return }
+        const item = { ...base, pinned_at: pinned_at || base.pinned_at, pinned_by, pinned_by_name }
+        activePins.value = [item, ...activePins.value.filter(p => p.id !== messageId)]
+          .sort((a, b) => (b.pinned_at || 0) - (a.pinned_at || 0) || b.id - a.id)
+      } else {
+        activePins.value = activePins.value.filter(p => p.id !== messageId)
+      }
     })
 
     socket.on('reaction:update', ({ messageId, reactions }) => {
@@ -376,6 +456,9 @@ export const useAppStore = defineStore('app', () => {
     const ti = threadReplies.value.findIndex(m => m.id === id)
     if (ti !== -1) threadReplies.value = threadReplies.value.map((m, i) => i === ti ? fn(m) : m)
     if (threadParent.value?.id === id) threadParent.value = fn(threadParent.value)
+    // Закреп показывает актуальный текст/реакции (правка, реакции и т.п.)
+    const pi = activePins.value.findIndex(m => m.id === id)
+    if (pi !== -1) activePins.value = activePins.value.map((m, i) => i === pi ? fn(m) : m)
   }
 
   function _removeMessage(id) {
@@ -384,6 +467,7 @@ export const useAppStore = defineStore('app', () => {
     }
     if (threadParentId.value === id) closeThread()
     else threadReplies.value = threadReplies.value.filter(m => m.id !== id)
+    if (activePins.value.some(m => m.id === id)) activePins.value = activePins.value.filter(m => m.id !== id)
   }
 
   // ── Треды ─────────────────────────────────────────────────
@@ -424,24 +508,87 @@ export const useAppStore = defineStore('app', () => {
   // ── API ────────────────────────────────────────────────
   async function fetchFolders() {
     const res = await fetch(`${API}/api/folders`)
-    folders.value = await res.json()
+    if (!res.ok) return // не затираем список объектом {error}
+    const data = await res.json()
+    if (Array.isArray(data)) folders.value = data
   }
 
   async function setChannel(chId) {
-    if (threadParentId.value && chId !== activeChId.value) closeThread()
+    chId = Number(chId)
+    const changed = chId !== activeChId.value
+    if (threadParentId.value && changed) closeThread()
     activeChId.value = chId
     if (unread.value[chId]) {
       const { [chId]: _, ...rest } = unread.value
       unread.value = rest
     }
+    // DM: сервер помечает диалог прочитанным на channel:join, локально обнуляем сразу
+    const di = dms.value.findIndex(d => d.id === chId)
+    if (di !== -1 && dms.value[di].unread) dms.value = dms.value.map((d, i) => i === di ? { ...d, unread: 0 } : d)
     socket?.emit('channel:join', { channelId: chId })
+    if (changed || !activePins.value.length) loadPins(chId)
     if (!messages.value[chId]) {
       const res = await fetch(`${API}/api/messages/${chId}`)
+      if (!res.ok) { messages.value[chId] = []; hasMore.value[chId] = false; return }
       const data = await res.json()
-      messages.value[chId] = data.messages
-      hasMore.value[chId] = data.hasMore
+      messages.value[chId] = data.messages || []
+      hasMore.value[chId] = !!data.hasMore
     }
   }
+
+  // ── Личные сообщения ──────────────────────────────────────
+  async function loadDms() {
+    try {
+      const res = await fetch(`${API}/api/dms`)
+      if (!res.ok) return dms.value
+      const data = await res.json()
+      if (Array.isArray(data)) dms.value = data
+    } catch { }
+    return dms.value
+  }
+
+  // Открыть (или создать) диалог с юзером, вернуть id канала диалога.
+  // Диалог с самим собой — «Избранное».
+  async function openDm(userId) {
+    const res = await fetch(`${API}/api/dms`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ user_id: Number(userId) })
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data?.id) throw new Error(data.error || 'Не удалось открыть диалог')
+    const d = { ...data, opened: true }
+    const exists = dms.value.some(x => x.id === d.id)
+    dms.value = exists ? dms.value.map(x => x.id === d.id ? { ...x, ...d } : x) : [d, ...dms.value]
+    await setChannel(d.id)
+    return d.id
+  }
+
+  // ── Закреплённые ─────────────────────────────────────────
+  async function loadPins(chId) {
+    const req = ++pinsReq
+    activePins.value = []
+    if (!chId) return
+    try {
+      const res = await fetch(`${API}/api/channels/${chId}/pins`)
+      if (!res.ok) return
+      const data = await res.json()
+      if (req === pinsReq && chId === activeChId.value && Array.isArray(data)) activePins.value = data
+    } catch { }
+  }
+
+  // pinned=false — открепить. Список обновится по эху message:pin от сервера
+  function pinMessage(messageId, pinned = true) {
+    if (!socket?.connected) return Promise.reject(new Error('Нет соединения с сервером'))
+    return new Promise((resolve, reject) => {
+      socket.timeout(8000).emit('message:pin', { messageId, pinned: !!pinned }, (err, ack) => {
+        if (err) return reject(new Error('Сервер не ответил — проверь соединение'))
+        if (!ack?.ok) return reject(new Error(ack?.error || (pinned ? 'Не удалось закрепить' : 'Не удалось открепить')))
+        resolve(true)
+      })
+    })
+  }
+  function isPinned(m) { return !!m?.pinned_at }
 
   async function loadMore(chId) {
     const list = messages.value[chId] || []
@@ -622,6 +769,8 @@ export const useAppStore = defineStore('app', () => {
     editMessage, deleteMessage, toggleReaction, votePoll, sendTyping,
     isMessageEntering,
     createTaskFromMessage, focusTarget, jumpToMessage, flashMsgId, flashMessage,
-    threadParentId, threadParent, threadReplies, threadLoading, threadFocusId, openThread, closeThread
+    threadParentId, threadParent, threadReplies, threadLoading, threadFocusId, openThread, closeThread,
+    dms, activeDm, isActiveDm, dmTitle, dmUnreadTotal, loadDms, openDm,
+    activePins, loadPins, pinMessage, isPinned
   }
 })

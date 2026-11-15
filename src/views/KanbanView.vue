@@ -1000,7 +1000,7 @@ onUnmounted(() => {
 .btn-add-card {
   display: flex; align-items: center; justify-content: center;
   width: 34px; height: 34px; padding: 0;
-  background: var(--accent); color: #fff;
+  background: var(--accent); color: var(--on-accent, #fff);
   border-radius: var(--radius-md);
   font-size: var(--text-sm); font-weight: 600;
   transition: background var(--transition);
@@ -1085,7 +1085,7 @@ onUnmounted(() => {
   position: absolute; top: -5px; right: -5px;
   min-width: 15px; height: 15px; padding: 0 3px;
   display: flex; align-items: center; justify-content: center;
-  border-radius: 999px; background: var(--accent); color: #fff;
+  border-radius: 999px; background: var(--accent); color: var(--on-accent, #fff);
   font-size: 9px; font-weight: 700; line-height: 1;
 }
 .filter-summary { color: var(--text-faint); font-size: 11px; }
@@ -1491,7 +1491,7 @@ onUnmounted(() => {
 .btn-save {
   padding: 8px 18px; border-radius: var(--radius-md);
   font-size: var(--text-sm); font-weight: 600;
-  background: var(--accent); color: #fff;
+  background: var(--accent); color: var(--on-accent, #fff);
   transition: background var(--transition);
 }
 .btn-save:hover:not(:disabled) { background: var(--accent-hover); }
@@ -1533,7 +1533,7 @@ onUnmounted(() => {
   white-space: nowrap;
   transition: all var(--transition);
 }
-.btn-restore:hover { background: var(--accent); color: #fff; }
+.btn-restore:hover { background: var(--accent); color: var(--on-accent, #fff); }
 
 @media (max-width: 860px) {
   .kanban-layout { grid-template-columns: 1fr; }
